@@ -84,3 +84,13 @@ def blender_candidates() -> list[Path]:
     for folder in apps:
         found += sorted(folder.glob("Blender*.app"), reverse=True)
     return [app / "Contents/MacOS/Blender" for app in found]
+
+
+def peak_rss() -> int:
+    """Peak resident memory of this process in bytes (Windows: peak working set)."""
+    if IS_WINDOWS:
+        import psutil
+        return psutil.Process().memory_info().peak_wset
+    import resource
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return peak if IS_MAC else peak * 1024  # macOS reports bytes, Linux KiB
