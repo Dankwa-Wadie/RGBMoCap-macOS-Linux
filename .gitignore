@@ -108,3 +108,12 @@ third_party/**/.git/
 
 # Local temporary shader/kernel caches
 /temp/
+
+# macOS port: local runtimes and build output
+.venv-exmr/
+.venv-flow/
+.venv-hand/
+.venv-htd/
+build/
+third_party/KimodoMotionCorrection/bin/*.so
+.DS_Store

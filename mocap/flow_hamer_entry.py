@@ -3,6 +3,9 @@ from pathlib import Path
 import sys,json
 sys.dont_write_bytecode=True
 root=Path(__file__).resolve().parents[1];sys.path.insert(0,str(root))
+if sys.platform=='darwin':
+    from mocap.torch_mps import install_on_import
+    install_on_import()
 from mocap.runtime_registry import activate
 activate(root,'exmr')
 from mocap.flow_hamer import run

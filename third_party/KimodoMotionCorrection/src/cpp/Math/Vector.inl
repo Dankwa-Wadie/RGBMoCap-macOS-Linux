@@ -1635,9 +1635,16 @@ namespace Math
     FORCE_INLINE Vector Vector::Swizzle(uint32_t xIdx, uint32_t yIdx, uint32_t zIdx, uint32_t wIdx) const
     {
         ASSERT(xIdx < 4 && yIdx < 4 && zIdx < 4 && wIdx < 4);
+#if defined( __aarch64__ ) || defined( __arm64__ ) || defined( _M_ARM64 )
+        // AVX _mm_permutevar_ps has no SSE/NEON equivalent: exact gather by the low 2 bits.
+        alignas( 16 ) float lanes[4];
+        _mm_store_ps(lanes, m_data);
+        return _mm_set_ps(lanes[wIdx & 3], lanes[zIdx & 3], lanes[yIdx & 3], lanes[xIdx & 3]);
+#else
         uint32_t const elem[4] = { xIdx, yIdx, zIdx, wIdx };
         __m128i vControl = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&elem[0]));
         return _mm_permutevar_ps(m_data, vControl);
+#endif
     }
 
     FORCE_INLINE Vector Vector::Shuffle(uint32_t xIdx, uint32_t yIdx, uint32_t zIdx, uint32_t wIdx) const

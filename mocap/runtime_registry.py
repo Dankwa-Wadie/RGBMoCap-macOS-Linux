@@ -41,7 +41,8 @@ def command(root,stage,args=(),*,frozen):
             raise RuntimeError(key+' runtime is missing. Run Setup to repair this installation.')
         # Isolated mode ignores PYTHONIOENCODING/PYTHONUTF8 from the GUI.
         return [str(python),'-I','-X','utf8',str(root/'worker_boot.py'),stage,*map(str,args)]
-    python=root/spec['dev']/'Scripts/python.exe'
+    from .platform_compat import venv_python
+    python=venv_python(root/spec['dev'])
     if not python.is_file(): raise RuntimeError(key+' development runtime is missing. Prepare its pinned environment.')
     return [str(python),'-X','utf8','-m','mocap.worker_progress',stage,*map(str,args)]
 
@@ -50,6 +51,8 @@ def activate(root,key,base_root=None):
     import importlib.metadata as metadata
     import importlib.util
     import sys
+    if sys.platform!='win32':
+        return activate_posix(root,key)
     root=Path(root).resolve();spec=PROFILES[key]
     base=PROFILES[spec['base']] if spec['base'] else spec
     base_root=Path(base_root).resolve() if base_root else root
@@ -71,3 +74,26 @@ def activate(root,key,base_root=None):
         if not actual.is_relative_to(expected.resolve()): raise RuntimeError('Unexpected '+name+' import path in '+key+': '+str(actual))
         paths[name]=str(actual)
     return dict(profile=key,python=str(python),packages=spec['packages'],imports=paths)
+
+
+def activate_posix(root,key):
+    """macOS: separated per-profile virtual environments (tools/setup_macos.sh).
+
+    The Windows pins carry CUDA wheel tags (+cu128); macOS uses the matching
+    plain PyPI builds, so only the public version is compared. The interpreter
+    must still be this profile's own environment: profiles never share packages.
+    """
+    import importlib.metadata as metadata
+    import sys
+    root=Path(root).resolve();spec=PROFILES[key]
+    from .platform_compat import venv_python
+    expected=venv_python(root/spec['dev'])
+    if Path(sys.prefix).resolve()!=(root/spec['dev']).resolve():
+        raise RuntimeError(f'Wrong interpreter for {key}: expected {expected}. Run tools/setup_macos.sh.')
+    if '.'.join(map(str,sys.version_info[:2]))!='.'.join(spec['python'].split('.')[:2]):
+        raise RuntimeError('Unexpected Python version for '+key)
+    for name,version in spec['packages'].items():
+        actual=metadata.version(name)
+        if actual.split('+')[0]!=version.split('+')[0]:
+            raise RuntimeError(f'Incompatible {name} {actual} in {key} (expected {version.split("+")[0]}). Run tools/setup_macos.sh.')
+    return dict(profile=key,python=str(expected),packages=spec['packages'],imports={})

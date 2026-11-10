@@ -9,6 +9,8 @@ def blender():
     if explicit:candidates.insert(0,Path(explicit))
     found=shutil.which('blender')
     if found:candidates.append(Path(found))
+    from mocap.platform_compat import blender_candidates
+    candidates+=blender_candidates()
     # Development discovery only; packaged applications use the managed runtime.
     if not getattr(__import__('sys'),'frozen',False):
         candidates+=sorted(Path('C:/BlenderLauncher/Blender/stable').glob('blender-4.5*/blender.exe'))

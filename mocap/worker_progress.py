@@ -1,5 +1,9 @@
 """Presentation-only worker entry; inference/cache identities stay unchanged."""
 import json,runpy,sys
+if sys.platform=='darwin':
+    # macOS: CUDA-addressed inference runs on Apple MPS (see mocap/torch_mps.py).
+    from .torch_mps import install_on_import
+    install_on_import()
 from contextlib import contextmanager,nullcontext
 
 for stream in (sys.stdout,sys.stderr):

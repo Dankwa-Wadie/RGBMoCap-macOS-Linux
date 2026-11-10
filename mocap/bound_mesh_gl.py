@@ -1,7 +1,9 @@
 """Small canonical actor binding over the shared registered SMPL-X buffers."""
 import numpy as np
 from PySide6.QtOpenGL import QOpenGLShader
-from .mesh_gl import MeshRenderer
+from .mesh_gl import MeshRenderer, host, _HOST
+from .platform_compat import GL_COMPUTE
+from . import cpu_skin
 
 SKIN="""#version 430 core
 layout(local_size_x=64) in;
@@ -49,8 +51,8 @@ class BoundMeshRenderer(MeshRenderer):
         self.binding_buffer=None;self.binding_key=None
         super().__init__(shared)
         if shared is None:
-            self.skin.removeAllShaders()
-            self.skin=self.program(((QOpenGLShader.Compute,SKIN),))
+            self.drop(self.skin)
+            self.skin=self.compute(SKIN)
 
     def release_buffers(self):
         super().release_buffers()
@@ -65,9 +67,14 @@ class BoundMeshRenderer(MeshRenderer):
             self.binding_buffer.bind()
             if self.binding_buffer.size()!=value.nbytes:raise ValueError('Canonical binding dimensions changed')
             self.binding_buffer.write(0,value.tobytes(),value.nbytes)
+            if not GL_COMPUTE:_HOST[id(self.binding_buffer)]=value
         self.binding_key=key;self.frame_key=None
 
     def deform(self,frame,key):
         if self.binding_buffer is None:raise ValueError('Canonical skin binding missing')
-        self.gl.glBindBufferBase(0x90D2,5,self.binding_buffer.bufferId())
+        self.bind_storage(5,self.binding_buffer)
         super().deform(frame,(self.binding_key,key))
+
+    def cpu_vertices(self,frame):
+        positions=cpu_skin.skin_bound(self.smplx_model(),frame,host(self.binding_buffer))
+        return cpu_skin.interleave(positions,self.topology()(positions))

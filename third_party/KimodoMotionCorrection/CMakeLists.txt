@@ -76,7 +76,12 @@ if(MSVC)
 else()
     # GCC/Clang flags (also applies to MinGW on Windows)
     # Enable SSE4.1 and AVX instructions for SIMD operations
-    target_compile_options(motion_correction_cpp_base PRIVATE -Wall -Wextra -msse4.1 -mavx)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$" OR CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+        # ARM64: SSE intrinsics map to NEON through src/cpp/third_party/sse2neon.h.
+        target_compile_options(motion_correction_cpp_base PRIVATE -Wall -Wextra)
+    else()
+        target_compile_options(motion_correction_cpp_base PRIVATE -Wall -Wextra -msse4.1 -mavx)
+    endif()
 endif()
 
 # Python bindings

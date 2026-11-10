@@ -3,7 +3,9 @@ import numpy as np
 from shiboken6 import VoidPtr
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtOpenGL import QOpenGLBuffer,QOpenGLShader
-from .mesh_gl import MeshRenderer
+from .mesh_gl import MeshRenderer, host
+from .platform_compat import GL_COMPUTE
+from . import cpu_skin
 
 SKIN='''#version 430 core
 layout(local_size_x=64) in;
@@ -32,8 +34,8 @@ class RigRenderer(MeshRenderer):
         super().__init__(shared)
         self.topology_key=None
         if shared is None:
-            self.skin.removeAllShaders()
-            self.skin=self.program(((QOpenGLShader.Compute,SKIN),))
+            self.drop(self.skin)
+            self.skin=self.compute(SKIN)
 
     def load(self,asset):
         if self.asset_key==asset['key']:return
@@ -62,11 +64,19 @@ class RigRenderer(MeshRenderer):
         frame=np.ascontiguousarray(frame,dtype=np.float32)
         expected=self.vertex_count*3 if self.raw else self.bone_count*16
         if frame.size!=expected or not np.isfinite(frame).all():raise ValueError('Invalid target render frame')
+        if not GL_COMPUTE:
+            self.upload_vertices(self.cpu_vertices(frame));self.frame_key=key;self.dispatches+=1;return
         self.frame.bind();self.frame.write(0,frame.tobytes(),frame.nbytes)
         for index,buffer in enumerate((self.model,self.vertices,self.offsets,self.neighbors,self.frame)):
-            self.gl.glBindBufferBase(0x90D2,index,buffer.bufferId())
+            self.bind_storage(index,buffer)
         for program in ([self.skin,self.normals] if self.raw else [self.skin]):
             program.bind();self.gl.glUniform1i(program.uniformLocation('vertexCount'),self.vertex_count)
             if program is self.skin:self.gl.glUniform1i(program.uniformLocation('rawMode'),int(self.raw))
             self.gl.glDispatchCompute((self.vertex_count+63)//64,1,1);self.gl.glMemoryBarrier(0x2000|0x1);program.release()
         self.check('target deform');self.frame_key=key;self.dispatches+=1
+
+    def cpu_vertices(self,frame):
+        if self.raw:
+            positions=frame.reshape(self.vertex_count,3)
+            return cpu_skin.interleave(positions,self.topology()(positions))
+        return cpu_skin.interleave(*cpu_skin.skin_rigid(host(self.model),self.vertex_count,frame,self.bone_count))

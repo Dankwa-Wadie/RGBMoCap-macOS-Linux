@@ -67,7 +67,9 @@ def refine(project,output,emit):
         import gc
         gc.collect();torch.cuda.empty_cache()
         python=ROOT/'runtime_exmr/python.exe'
-        if not python.is_file():python=ROOT/'.venv-exmr/Scripts/python.exe'
+        if not python.is_file():
+            from .platform_compat import venv_python
+            python=venv_python(ROOT/'.venv-exmr')
         if not python.is_file():raise RuntimeError('HaMeR needs the base ExMR runtime. Run install.cmd to repair it.')
         emit('info',message='FlowHMR HaMeR: every-frame fingers; ExMR crops and Gaussian smoothing. Body, wrists and trajectory are retained.')
         command=[str(python),'-I','-X','utf8',str(ROOT/'mocap/flow_hamer_entry.py'),str(project)]

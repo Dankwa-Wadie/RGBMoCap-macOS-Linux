@@ -3,7 +3,35 @@ import numpy as np
 from shiboken6 import VoidPtr
 from PySide6.QtGui import QMatrix4x4, QVector3D
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram,
-    QOpenGLFunctions_4_3_Core, QOpenGLVertexArrayObject)
+    QOpenGLVertexArrayObject)
+from .platform_compat import GL_COMPUTE, GL_VERSION, glsl
+from . import cpu_skin
+if GL_COMPUTE:
+    from PySide6.QtOpenGL import QOpenGLFunctions_4_3_Core as GLFunctions
+else:
+    # macOS: OpenGL 4.1 core. Skinning runs in mocap.cpu_skin instead of compute shaders.
+    from PySide6.QtOpenGL import QOpenGLFunctions_4_1_Core as GLFunctions
+
+# Host copies of uploaded buffers, used by the CPU skinning path (keyed by id(buffer)).
+_HOST = {}
+_DERIVED = {}
+
+
+def host(buffer):
+    return _HOST[id(buffer)]
+
+
+def derived(buffer, kind, build):
+    key = (id(buffer), kind)
+    if key not in _DERIVED:
+        _DERIVED[key] = build()
+    return _DERIVED[key]
+
+
+def forget(buffer):
+    _HOST.pop(id(buffer), None)
+    for key in [k for k in _DERIVED if k[0] == id(buffer)]:
+        del _DERIVED[key]
 
 SKIN = """#version 430 core
 layout(local_size_x=64) in;
@@ -81,12 +109,12 @@ void main() {
 
 class MeshRenderer:
     def __init__(self,shared=None):
-        self.gl = QOpenGLFunctions_4_3_Core()
+        self.gl = GLFunctions()
         if not self.gl.initializeOpenGLFunctions():
-            raise RuntimeError("SMPL-X Mesh requires OpenGL 4.3. Update the graphics driver.")
+            raise RuntimeError("SMPL-X Mesh requires OpenGL %d.%d. Update the graphics driver." % GL_VERSION)
         self.shared=shared
-        self.skin = shared.skin if shared else self.program(((QOpenGLShader.Compute,SKIN),))
-        self.normals = shared.normals if shared else self.program(((QOpenGLShader.Compute,NORMALS),))
+        self.skin = shared.skin if shared else self.compute(SKIN)
+        self.normals = shared.normals if shared else self.compute(NORMALS)
         self.surface = shared.surface if shared else self.program(((QOpenGLShader.Vertex,VERTEX),(QOpenGLShader.Fragment,FRAGMENT)))
         self.buffers = []
         self.vao = QOpenGLVertexArrayObject()
@@ -102,10 +130,26 @@ class MeshRenderer:
         if error:
             raise RuntimeError(f"OpenGL {error} at {label}")
 
+    @classmethod
+    def compute(cls, source):
+        """A compute program on GL 4.3; None on GL 4.1, where mocap.cpu_skin runs instead."""
+        return cls.program(((QOpenGLShader.Compute,source),)) if GL_COMPUTE else None
+
+    @staticmethod
+    def drop(program):
+        if program is not None:
+            program.removeAllShaders()
+
+    def bind_storage(self, index, buffer):
+        if GL_COMPUTE:
+            self.gl.glBindBufferBase(0x90D2,index,buffer.bufferId())
+
     @staticmethod
     def program(stages):
         p = QOpenGLShaderProgram()
         for stage,source in stages:
+            if stage != QOpenGLShader.Compute:
+                source = glsl(source)
             if not p.addShaderFromSourceCode(stage,source):
                 raise RuntimeError(p.log())
         if not p.link():
@@ -123,6 +167,8 @@ class MeshRenderer:
             value = data.tobytes()
             b.allocate(value,len(value))
             size = len(value)
+            if not GL_COMPUTE:
+                _HOST[id(b)] = np.array(data, copy=True).reshape(-1)
         self.buffers.append(b)
         self.gpu_bytes += size
         return b
@@ -143,7 +189,7 @@ class MeshRenderer:
         self.indices = owner.indices if owner else self.buffer(asset["faces"],QOpenGLBuffer.IndexBuffer)
         self.indices.bind()
         for index,b in enumerate((self.model,self.vertices,self.offsets,self.neighbors,self.frame)):
-            self.gl.glBindBufferBase(0x90D2,index,b.bufferId())
+            self.bind_storage(index,b)
         self.surface.bind()
         self.vertices.bind()
         self.surface.enableAttributeArray(0)
@@ -160,11 +206,16 @@ class MeshRenderer:
         if key == self.frame_key:
             return
         frame = np.ascontiguousarray(frame,dtype=np.float32)
+        if not GL_COMPUTE:
+            self.upload_vertices(self.cpu_vertices(frame))
+            self.frame_key = key
+            self.dispatches += 1
+            return
         self.frame.bind()
         self.frame.write(0,frame.tobytes(),frame.nbytes)
         self.check("frame upload")
         for index,b in enumerate((self.model,self.vertices,self.offsets,self.neighbors,self.frame)):
-            self.gl.glBindBufferBase(0x90D2,index,b.bufferId())
+            self.bind_storage(index,b)
         self.check("bind storage")
         for program in (self.skin,self.normals):
             program.bind()
@@ -177,6 +228,28 @@ class MeshRenderer:
             program.release()
         self.frame_key = key
         self.dispatches += 1
+
+    # --- CPU skinning (OpenGL 4.1 / macOS) -------------------------------------
+    def smplx_model(self):
+        return derived(self.model,'smplx',lambda: cpu_skin.SmplxModel(host(self.model),self.vertex_count))
+
+    def topology(self):
+        return derived(self.neighbors,('normals',self.vertex_count),
+                       lambda: cpu_skin.NormalTopology(host(self.offsets),host(self.neighbors),self.vertex_count))
+
+    def cpu_vertices(self, frame):
+        """Same result as the SKIN + NORMALS compute passes, as (V,8) records."""
+        positions = cpu_skin.skin_smplx(self.smplx_model(), frame)
+        return cpu_skin.interleave(positions, self.topology()(positions))
+
+    def upload_vertices(self, records):
+        records = np.ascontiguousarray(records, np.float32)
+        if records.shape != (self.vertex_count, 8) or not np.isfinite(records).all():
+            raise ValueError('Invalid CPU-skinned vertices')
+        self.vertices.bind()
+        self.vertices.write(0, records.tobytes(), records.nbytes)
+        self.cpu_records = records
+        self.check("cpu vertex upload")
 
     def draw(self, eye, basis, width, height, color=(.71,.71,.71),transform=None,clear_depth=True):
         projection = QMatrix4x4()
@@ -212,6 +285,7 @@ class MeshRenderer:
 
     def release_buffers(self):
         for b in self.buffers:
+            forget(b)
             b.destroy()
         self.buffers.clear()
         self.asset_key = self.frame_key = None
@@ -222,4 +296,4 @@ class MeshRenderer:
         self.vao.destroy()
         if not self.shared:
             for p in (self.skin,self.normals,self.surface):
-                p.removeAllShaders()
+                self.drop(p)

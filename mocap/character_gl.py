@@ -2,7 +2,9 @@
 import numpy as np
 from PySide6.QtOpenGL import QOpenGLShader,QOpenGLBuffer,QOpenGLTexture
 from PySide6.QtGui import QImage,QMatrix4x4,QVector4D
-from .mesh_gl import MeshRenderer
+from .mesh_gl import MeshRenderer, host
+from .platform_compat import GL_COMPUTE
+from . import cpu_skin
 
 SKIN='''#version 430 core
 layout(local_size_x=64) in;
@@ -46,14 +48,21 @@ if(c.a<.1)discard;
 float light=.60+.35*max(0,dot(normalize(n),normalize(vec3(-.4,.8,-.6))));
 color=vec4(c.rgb*light,1);}'''
 
+# GL 4.1 (macOS): no SSBO reads in the vertex shader. Skinned vertices are
+# expanded per texture corner on the CPU and arrive as ordinary attributes.
+TEXTURE_VERTEX_ATTRIBUTES='''#version 430 core
+layout(location=0) in vec3 position;layout(location=1) in vec3 normal;layout(location=2) in vec2 corner_uv;
+uniform mat4 mvp;uniform mat4 sceneTransform;out vec3 n;out vec2 uv;
+void main(){gl_Position=mvp*sceneTransform*vec4(position,1);n=mat3(sceneTransform)*normal;uv=corner_uv;}'''
+
 class CharacterRenderer(MeshRenderer):
     def __init__(self):
         super().__init__()
-        self.skin.removeAllShaders();self.surface.removeAllShaders()
-        self.skin=self.program(((QOpenGLShader.Compute,SKIN),))
+        self.drop(self.skin);self.surface.removeAllShaders()
+        self.skin=self.compute(SKIN)
         self.surface=self.program(((QOpenGLShader.Vertex,VERTEX),(QOpenGLShader.Fragment,FRAGMENT)))
-        self.textured=self.program(((QOpenGLShader.Vertex,TEXTURE_VERTEX),(QOpenGLShader.Fragment,TEXTURE_FRAGMENT)))
-        self.textures={};self.batches=[]
+        self.textured=self.program(((QOpenGLShader.Vertex,TEXTURE_VERTEX if GL_COMPUTE else TEXTURE_VERTEX_ATTRIBUTES),(QOpenGLShader.Fragment,TEXTURE_FRAGMENT)))
+        self.textures={};self.batches=[];self.corner_index=None;self.expanded=None
 
     def load(self,asset,palette):
         if self.asset_key==asset['key']:return
@@ -75,7 +84,14 @@ class CharacterRenderer(MeshRenderer):
                 data=asset['textures']
                 self.vao.bind();self.textured.bind()
                 self.corners=self.buffer(data['corners'])
-                self.textured.enableAttributeArray(0);self.textured.setAttributeBuffer(0,0x1406,0,3,12)
+                if GL_COMPUTE:
+                    self.textured.enableAttributeArray(0);self.textured.setAttributeBuffer(0,0x1406,0,3,12)
+                else:
+                    corners=np.asarray(data['corners'],np.float32).reshape(-1,3)
+                    self.corner_index=corners[:,0].astype(np.int64);self.corner_uv=corners[:,1:3]
+                    self.expanded=self.buffer(len(corners)*32);self.expanded.bind()
+                    for location,offset,size in ((0,0,3),(1,12,3),(2,24,2)):
+                        self.textured.enableAttributeArray(location);self.textured.setAttributeBuffer(location,0x1406,offset,size,32)
                 self.vao.release();self.textured.release()
                 for name,pixels in data['images'].items():
                     h,w=pixels.shape[:2]
@@ -105,7 +121,7 @@ class CharacterRenderer(MeshRenderer):
         shader.setUniformValue('mvp',projection*QMatrix4x4(*view.ravel().tolist()))
         shader.setUniformValue('sceneTransform',QMatrix4x4(*np.asarray(transform if transform is not None else np.eye(4)).ravel().tolist()))
         gl.glUniform1i(shader.uniformLocation('baseTexture'),0)
-        gl.glBindBufferBase(0x90D2,1,self.vertices.bufferId())
+        self.bind_storage(1,self.vertices)
         gl.glEnable(0x0B71);gl.glDepthMask(True);gl.glDepthFunc(0x0201)
         for flag in (0x0B90,0x0C11,0x0B44,0x0BE2):gl.glDisable(flag)
         if clear_depth:gl.glClear(0x100)
@@ -119,9 +135,18 @@ class CharacterRenderer(MeshRenderer):
         gl.glBindTexture(0x0DE1,0)
         self.vao.release();shader.release();gl.glDisable(0x0B71)
 
+    def cpu_vertices(self,frame):
+        positions=cpu_skin.skin_sparse(host(self.model),self.vertex_count,frame,len(frame)//16)
+        records=cpu_skin.interleave(positions,self.topology()(positions))
+        if self.expanded is not None:
+            corners=np.empty((len(self.corner_index),8),np.float32)
+            corners[:,:3]=records[self.corner_index,:3];corners[:,3:6]=records[self.corner_index,4:7];corners[:,6:8]=self.corner_uv
+            self.expanded.bind();self.expanded.write(0,corners.tobytes(),corners.nbytes)
+        return records
+
     def release_buffers(self):
         for texture in self.textures.values():texture.destroy()
-        self.textures.clear();self.batches=[]
+        self.textures.clear();self.batches=[];self.corner_index=None;self.expanded=None
         super().release_buffers()
 
     def close(self):

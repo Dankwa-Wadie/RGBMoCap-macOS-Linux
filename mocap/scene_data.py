@@ -128,7 +128,7 @@ class PeopleScene:
 
 def prepare_camera_process(root,cancelled):
     from .paths import ROOT
-    if getattr(sys,'frozen',False) or __import__('os').environ.get('RGB_MOCAP_MANAGED') == '1':command=[str(ROOT/'runtime/python.exe'),'-I','-X','utf8',str(ROOT/'scene_boot.py'),str(root)]
+    if getattr(sys,'frozen',False) or __import__('os').environ.get('RGB_MOCAP_MANAGED') == '1':command=[str(__import__('mocap.platform_compat',fromlist=['x']).runtime_python(ROOT/'runtime')),'-I','-X','utf8',str(ROOT/'scene_boot.py'),str(root)]
     else:command=[sys.executable,'-X','utf8','-m','mocap.scene_camera',str(root)]
     log=root/'.scene_camera.log'
     with log.open('wb') as output:

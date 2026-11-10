@@ -29,7 +29,8 @@ class MotionView(ViewportBase):
         super().__init__()
         if OPENGL_VIEW:
             fmt = QSurfaceFormat()
-            fmt.setVersion(4,3)
+            from .platform_compat import GL_VERSION
+            fmt.setVersion(*GL_VERSION)
             fmt.setProfile(QSurfaceFormat.CoreProfile)
             fmt.setDepthBufferSize(24)
             fmt.setStencilBufferSize(8)

@@ -6,7 +6,18 @@
 #pragma once
 
 #include <stdint.h>
+#if defined( __aarch64__ ) || defined( __arm64__ ) || defined( _M_ARM64 )
+// Apple Silicon / ARM64: translate the SSE intrinsics to NEON (RGB MoCap macOS port).
+#define SSE2NEON_PRECISE_MINMAX 1
+#define SSE2NEON_PRECISE_DIV 1
+#define SSE2NEON_PRECISE_SQRT 1
+#include "../third_party/sse2neon.h"
+// sse2neon defines FORCE_INLINE as "static inline"; restore the project's meaning.
+#undef FORCE_INLINE
+#define FORCE_INLINE inline __attribute__((always_inline))
+#else
 #include <immintrin.h>
+#endif
 
 namespace SIMD
 {

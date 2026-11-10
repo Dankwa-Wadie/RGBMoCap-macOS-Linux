@@ -1647,6 +1647,9 @@ class MainWindow(PreviewExportWorkspace,PearWorkspace,GemXWorkspace,PromptHMRWor
                 helper.finished.connect(cancelled)
                 helper.start("taskkill.exe", ["/PID", str(worker.processId()), "/T", "/F"])
             else:
+                # Stop FFmpeg/other descendants too, as taskkill /T does on Windows.
+                from .platform_compat import kill_tree
+                kill_tree(worker.processId())
                 worker.kill()
         self.status.setText("Cancelled. Completed stages will be reused next time.")
 

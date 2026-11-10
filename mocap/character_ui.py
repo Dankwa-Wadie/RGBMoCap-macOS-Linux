@@ -310,6 +310,9 @@ class CharacterWorkspace:
         p=self.character_process
         if not p:return
         self.character_cancelled=True;self.character_line='Cancelling character job...'
+        if __import__('os').name!='nt':
+            from .platform_compat import kill_tree
+            kill_tree(p.processId());return
         helper=QProcess(self);self._character_killer=helper
         helper.start('taskkill',['/PID',str(p.processId()),'/T','/F'])
         helper.finished.connect(helper.deleteLater)
