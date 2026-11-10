@@ -67,7 +67,21 @@ PYTHONPATH=. .venv/bin/python tests_macos/gl41_render_check.py /tmp/gl41.png
   uses DirectShow on Windows.
 - **FlowHMR, GVHMR and GEM-X are untested on macOS.** FlowHMR has optional
   CUDA paths (flash-attn, cupy, compiled kernels) that must fall back to eager
-  PyTorch code. See the status table in the port notes below.
+  PyTorch code. See the status table below.
 
 Expect inference to be several times slower than on a high-end NVIDIA GPU.
 Unified memory lets large models load, but long clips use a lot of RAM.
+
+## Port status
+
+| Component | macOS status |
+| --- | --- |
+| GUI, video import, timeline, playback | Working |
+| 3D viewport (bones, SMPL-X mesh, characters) | Working on GL 4.1 with CPU skinning. Verified with synthetic meshes; real SMPL-X playback needs the registered SMPL-X file. |
+| Find person (YOLOv8x + OSNet on MPS) | Working (sample clip: 2 people found) |
+| Motion correction (foot/hand locks) | Working; arm64 output identical to the x86 SSE build |
+| ExMR (Sapiens2, SAM 3D Body, HaMeR, ExMR) | Runtime installed (torch 2.8 MPS). End-to-end run pending model files. |
+| FBX/BVH/.blend export, retargeting | Uses `/Applications/Blender.app`; pending a reconstructed motion |
+| Bone Stream to Blender | Add-on installed in Blender 5.2; same-machine `127.0.0.1:49168` connection; pending a reconstructed motion |
+| GVHMR, FlowHMR, GEM-X | Not yet tested |
+| MAMMA, PromptHMR, SAM 3.1, PEAR live | Not supported (CUDA kernels or DirectShow) |
