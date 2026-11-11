@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODELS = ROOT / 'models' / 'live'
 PORT = 49170
 POSE_WRISTS = {'left': 15, 'right': 16}
+STABLE_FRAMES = 6  # ~0.5 s at webcam rates before a newly seen landmark is trusted
 
 
 class OneEuro:
@@ -84,6 +85,9 @@ class Tracker:
         self.face, self.pose, self.hands = make_detectors(vision.RunningMode.VIDEO)
         self.smooth = smooth
         self.filters = {}
+        self.streak = None
+        from concurrent.futures import ThreadPoolExecutor
+        self.pool = ThreadPoolExecutor(3)
 
     def filt(self, key, value, t, **kw):
         if not self.smooth:
@@ -96,12 +100,13 @@ class Tracker:
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         t = t_ms / 1000.0
         packet = {'t': t}
-        face = self.face.detect_for_video(image, t_ms)
+        # The three models are independent: run them at the same time (MediaPipe releases the GIL).
+        jobs = [self.pool.submit(d.detect_for_video, image, t_ms) for d in (self.face, self.pose, self.hands)]
+        face, pose, hands = (j.result() for j in jobs)
         if face.face_blendshapes:
             names = [c.category_name for c in face.face_blendshapes[0]]
             scores = self.filt('face', [c.score for c in face.face_blendshapes[0]], t, min_cutoff=2.0, beta=0.5)
             packet['face'] = {n: round(float(s), 4) for n, s in zip(names, scores) if n != '_neutral'}
-        pose = self.pose.detect_for_video(image, t_ms)
         pose_image = None
         if pose.pose_world_landmarks:
             world = [[l.x, l.y, l.z] for l in pose.pose_world_landmarks[0]]
@@ -109,12 +114,15 @@ class Tracker:
             pose_image = np.array([[l.x, l.y] for l in pose.pose_landmarks[0]])
             packet['pose'] = np.round(self.filt('pose', to_blender(world), t), 4).tolist()
             packet['pose_visibility'] = np.round(vis, 3).tolist()
-            # A landmark drives the avatar only when MediaPipe is confident and it is inside the
-            # picture; off-frame legs are otherwise hallucinated and jitter.
+            # A landmark drives the avatar only when MediaPipe is confident, it is clearly inside
+            # the picture, and that has held for STABLE_FRAMES frames; off-frame legs are
+            # otherwise hallucinated and flicker in at the image edge. Losing it is immediate.
             image_lms = pose.pose_landmarks[0]
-            packet['pose_valid'] = [bool(l.visibility > 0.6 and 0.01 < l.x < 0.99 and 0.01 < l.y < 0.99)
-                                    for l in image_lms]
-        hands = self.hands.detect_for_video(image, t_ms)
+            raw = [l.visibility > 0.75 and 0.03 < l.x < 0.97 and 0.03 < l.y < 0.97 for l in image_lms]
+            if self.streak is None or len(self.streak) != len(raw):
+                self.streak = [0] * len(raw)
+            self.streak = [s + 1 if r else 0 for s, r in zip(self.streak, raw)]
+            packet['pose_valid'] = [s >= STABLE_FRAMES for s in self.streak]
         if hands.hand_world_landmarks:
             packet['hands'] = {}
             for image_points, world_points in zip(hands.hand_landmarks, hands.hand_world_landmarks):
@@ -137,6 +145,31 @@ class Tracker:
         distances = {s: float(np.linalg.norm(pose_image[i] - wrist)) for s, i in POSE_WRISTS.items()}
         side = min(distances, key=distances.get)
         return side if distances[side] < 0.15 else None
+
+
+class LatestFrame:
+    """Read the camera on its own thread and keep only the newest frame, so tracking never
+    waits a whole camera interval (synchronous reads halve the rate when work > 1 frame)."""
+
+    def __init__(self, cap):
+        import threading
+        self.cap, self.frame, self.id, self.running = cap, None, 0, True
+        self.ready = threading.Condition()
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def run(self):
+        while self.running:
+            ok, frame = self.cap.read()
+            with self.ready:
+                self.frame = frame if ok else None
+                self.id += 1
+                self.running = ok
+                self.ready.notify_all()
+
+    def read(self, last_id):
+        with self.ready:
+            self.ready.wait_for(lambda: self.id != last_id or not self.running)
+            return self.frame is not None, self.frame, self.id
 
 
 def draw(frame, results, fps):
@@ -169,6 +202,7 @@ def main():
     ap.add_argument('--no-preview', action='store_true')
     ap.add_argument('--no-smooth', action='store_true')
     ap.add_argument('--frames', type=int, default=0, help='stop after N frames (testing)')
+    ap.add_argument('--snapshots', type=Path, help='save an annotated camera frame here every second (diagnostics)')
     ap.add_argument('--crop', help='x,y,w,h region of the frame to track (e.g. a screen recording)')
     ap.add_argument('--dump', type=Path, help='also write every packet to this JSON-lines file')
     args = ap.parse_args()
@@ -184,12 +218,16 @@ def main():
     tracker = Tracker(smooth=not args.no_smooth)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     dump = args.dump.open('w') if args.dump else None
-    start = time.monotonic(); count = 0; fps = 0.0; last = start
+    start = time.monotonic(); count = 0; fps = 0.0; last = start; last_snapshot = start
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    camera = None if args.video else LatestFrame(cap); frame_id = 0
     print(f'Streaming to udp://{args.host}:{args.port}. In Blender: N panel > RGB MoCap Live > Start.', flush=True)
     try:
         while True:
-            ok, frame = cap.read()
+            if camera:
+                ok, frame, frame_id = camera.read(frame_id)
+            else:
+                ok, frame = cap.read()
             if not ok:
                 break
             if args.crop:
@@ -206,13 +244,22 @@ def main():
             now = time.monotonic()
             fps = 0.9 * fps + 0.1 / max(1e-3, now - last) if count > 1 else 0.0
             last = now
+            if args.snapshots and (count == 1 or int(now) != int(last_snapshot)):
+                last_snapshot = now
+                args.snapshots.mkdir(parents=True, exist_ok=True)
+                stamp = time.time()
+                cv2.imwrite(str(args.snapshots / f'camera_{stamp:.0f}.jpg'), draw(frame.copy(), results, fps))
+                (args.snapshots / f'camera_{stamp:.0f}.json').write_text(json.dumps(packet))
             if not args.no_preview:
-                cv2.imshow('RGB MoCap Live', draw(frame, results, fps))
+                small = cv2.resize(frame, (960, int(frame.shape[0] * 960 / frame.shape[1])))  # cheap preview
+                cv2.imshow('RGB MoCap Live', draw(small, results, fps))
                 if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
                     break
             if args.frames and count >= args.frames:
                 break
     finally:
+        if camera:
+            camera.running = False
         cap.release(); cv2.destroyAllWindows()
         if dump:
             dump.close()

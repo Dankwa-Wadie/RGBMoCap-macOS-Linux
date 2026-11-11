@@ -24,8 +24,52 @@ def begin():
         if area.type == 'VIEW_3D':
             area.spaces.active.show_region_ui = True
             area.spaces.active.shading.type = 'MATERIAL'
+            # Face the avatar from the front and frame it.
+            region = next(r for r in area.regions if r.type == 'WINDOW')
+            for o in bpy.context.view_layer.objects:
+                o.select_set(o == arm or o.parent == arm)
+            bpy.context.view_layer.objects.active = arm
+            with bpy.context.temp_override(area=area, region=region):
+                bpy.ops.view3d.view_axis(type='FRONT')
+                bpy.ops.view3d.view_selected()
+            for o in bpy.context.view_layer.objects:
+                o.select_set(False)
     print('RGB MoCap Live: listening on udp://127.0.0.1:%d for %s' % (live.PORT, arm.name))
     return None
 
 
 bpy.app.timers.register(begin, first_interval=1.0)
+
+
+# Diagnostics: RGBMOCAP_LIVE_DIAG=folder saves a viewport screenshot and the received
+# validity / bone angles every second, to compare against capture.py --snapshots.
+import json, os, time
+DIAG = os.environ.get('RGBMOCAP_LIVE_DIAG')
+
+
+def diagnostics():
+    r = live.RECEIVER
+    if not DIAG or r.avatar is None:
+        return 1.0
+    folder = Path(DIAG); folder.mkdir(parents=True, exist_ok=True); stamp = time.time()
+    p = r.last or {}
+    av = r.avatar
+    names = {11: 'L_sh', 12: 'R_sh', 23: 'L_hip', 24: 'R_hip', 25: 'L_knee', 26: 'R_knee', 27: 'L_ankle', 28: 'R_ankle'}
+    info = dict(frames=r.frames, packet_frame=p.get('frame'),
+                valid={n: (p.get('pose_valid') or [None] * 33)[i] for i, n in names.items()},
+                visibility={n: (p.get('pose_visibility') or [None] * 33)[i] for i, n in names.items()},
+                bones={h: round(av.bones[h].rotation_quaternion.angle * 57.2958, 1) for h in
+                       ('hips', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg', 'leftUpperArm', 'rightUpperArm')
+                       if h in av.bones},
+                weights={h: round(av.weight.get(av.bones[h].name, 0), 2) for h in ('leftUpperLeg', 'rightUpperLeg') if h in av.bones})
+    (folder / f'blender_{stamp:.0f}.json').write_text(json.dumps(info))
+    window = bpy.context.window_manager.windows[0]
+    area = next((a for a in window.screen.areas if a.type == 'VIEW_3D'), None)
+    if area is not None:
+        with bpy.context.temp_override(window=window, area=area):
+            bpy.ops.screen.screenshot_area(filepath=str(folder / f'blender_{stamp:.0f}.png'))
+    return 1.0
+
+
+if DIAG:
+    bpy.app.timers.register(diagnostics, first_interval=3.0, persistent=True)

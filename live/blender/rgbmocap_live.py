@@ -120,9 +120,15 @@ class Avatar:
             mid_sh = (P[L_SH] + P[R_SH]) / 2
             up = self.to_local @ Vector((0, 0, 1))
             if ok(L_SH, R_SH):
-                if ok(L_HIP, R_HIP):
+                legs_seen = ok(L_KN, R_KN) or ok(L_KN, L_AN) or ok(R_KN, R_AN)
+                if ok(L_HIP, R_HIP) and legs_seen:
                     mid_hip = (P[L_HIP] + P[R_HIP]) / 2
                     targets['hips'] = ('frame', frame_from(P[L_HIP] - P[R_HIP], mid_sh - mid_hip))
+                    targets['chest'] = ('frame', frame_from(P[L_SH] - P[R_SH], mid_sh - mid_hip))
+                elif ok(L_HIP, R_HIP):
+                    # Upper body only (seated, legs out of view): the pelvis and resting legs hold
+                    # still; leaning and turning go to the spine and chest.
+                    mid_hip = (P[L_HIP] + P[R_HIP]) / 2
                     targets['chest'] = ('frame', frame_from(P[L_SH] - P[R_SH], mid_sh - mid_hip))
                 else:
                     # Hips out of view: keep the pelvis upright, turned with the shoulders.
@@ -140,7 +146,7 @@ class Avatar:
             targets[side + 'Hand'] = ('frame', self.hand_frame(H[9] - H[0], H[5] - H[17]))
             for suffix, (a, b) in FINGERS.items():
                 targets[side + suffix] = ('dir', H[b] - H[a])
-        if 'hips' in targets and 'chest' in targets and 'spine' in self.bones:
+        if 'chest' in targets and 'spine' in self.bones:
             targets['spine'] = ('blend', ('hips', 'chest'))
         if 'chest' in targets and 'head' in targets and 'neck' in self.bones:
             targets['neck'] = ('blend', ('chest', 'head'))
@@ -153,8 +159,9 @@ class Avatar:
         if kind == 'frame' and rest is not None:
             return (value @ rest.transposed()).to_quaternion()
         if kind == 'blend':
-            a, b = (absolute.get(n) for n in value)
-            if a is not None and b is not None:
+            # An untracked end (e.g. hidden hips) blends from its rest orientation.
+            a, b = (absolute.get(n, Quaternion()) for n in value)
+            if value[1] in absolute:
                 return a.slerp(b, 0.5)
         return None
 
