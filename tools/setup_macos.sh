@@ -26,7 +26,7 @@ for arg in "$@"; do
     --no-models) MODELS=0 ;;
     --mpi-email) shift_next=1 ;;
     --mpi-email=*) MPI_EMAIL_ARG="${arg#*=}" ;;
-    -h|--help) sed -n 2,16p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,15p "$0"; exit 0 ;;
     *) echo "Unknown option: $arg"; exit 2 ;;
   esac
 done
