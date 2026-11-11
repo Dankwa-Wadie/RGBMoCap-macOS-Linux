@@ -25,11 +25,24 @@ which are the Windows pins with the CUDA wheel tags removed. It also compiles
 the motion correction module for arm64 and, with `--blender-addon`, installs
 and enables the Bone Stream add-on in the newest Blender in `/Applications`.
 
-Prepare model files in **Model Manager**, as on Windows. SMPL-X and MANO
-need a free account on their providers' sites. SAM 3D Body (used by ExMR and
-FlowHMR) is gated on Hugging Face: request access on
-`facebook/sam-3d-body-dinov3`, then run `hf auth login` before using
-**Auto Download**.
+### Model files
+
+Setup runs `tools/fetch_models.py`, which gets every file ExMR needs from its
+official source and registers it through the app's own size and hash checks:
+
+- **Public weights** (ExMR, Sapiens2, HaMeR, YOLO, OSNet) download automatically.
+- **SAM 3D Body** is gated. Request access once at
+  https://huggingface.co/facebook/sam-3d-body-dinov3 and run `hf auth login`.
+  After that it also downloads automatically.
+- **SMPL-X and MANO** need a free account at https://smpl-x.is.tue.mpg.de/ and
+  https://mano.is.tue.mpg.de/. Their licenses do not allow redistribution, so
+  this fork never ships them. Either download `models_smplx_v1_1.zip` and
+  `mano_v1_2.zip` into `~/Downloads` (setup finds and imports them, zipped or
+  extracted), or pass `--mpi-email you@example.com` to download them with your
+  account. The password is asked for once and never stored.
+
+Run `.venv/bin/python tools/fetch_models.py --check` to see what is still missing.
+Model Manager in the app still works for manual imports.
 
 ## What changed for macOS
 

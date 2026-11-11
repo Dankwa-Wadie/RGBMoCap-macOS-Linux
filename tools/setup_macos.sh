@@ -8,17 +8,25 @@
 #   tools/setup_macos.sh                  shared/GUI + ExMR runtimes, motion correction
 #   tools/setup_macos.sh --all            also FlowHMR, HandFlow and HTD runtimes
 #   tools/setup_macos.sh --blender-addon  also install the Bone Stream add-on into Blender
+#   tools/setup_macos.sh --mpi-email you@example.com
+#                                         also download SMPL-X/MANO with your own account
+#   tools/setup_macos.sh --no-models      skip model downloads
 #
-# Models are prepared afterwards in the app's Model Manager, as on Windows.
+# Model files are fetched by tools/fetch_models.py from their official sources.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-ALL=0; ADDON=0
+ALL=0; ADDON=0; MODELS=1; MPI_EMAIL_ARG=""
+shift_next=0
 for arg in "$@"; do
+  if [ $shift_next = 1 ]; then MPI_EMAIL_ARG="$arg"; shift_next=0; continue; fi
   case "$arg" in
     --all) ALL=1 ;;
     --blender-addon) ADDON=1 ;;
-    -h|--help) sed -n 2,12p "$0"; exit 0 ;;
+    --no-models) MODELS=0 ;;
+    --mpi-email) shift_next=1 ;;
+    --mpi-email=*) MPI_EMAIL_ARG="${arg#*=}" ;;
+    -h|--help) sed -n 2,16p "$0"; exit 0 ;;
     *) echo "Unknown option: $arg"; exit 2 ;;
   esac
 done
@@ -89,5 +97,11 @@ bpy.ops.wm.save_userpref()
 print('RGB MoCap Bone Stream enabled in', bpy.app.version_string)" 2>&1 | grep -E "enabled|Error" || true
 fi
 
+if [ $MODELS = 1 ]; then
+  say "Model files (official sources; SMPL-X/MANO from ~/Downloads or your own account)"
+  .venv/bin/python tools/fetch_models.py ${MPI_EMAIL_ARG:+--mpi-email "$MPI_EMAIL_ARG"} || \
+    echo "Some model files still need you (see above). Rerun: .venv/bin/python tools/fetch_models.py"
+fi
+
 say "Done. Start the app with ./RGBMoCap.command (or double-click it in Finder)."
-echo "Then open Model Manager in the app to prepare model files."
+echo "Check models any time: .venv/bin/python tools/fetch_models.py --check"
