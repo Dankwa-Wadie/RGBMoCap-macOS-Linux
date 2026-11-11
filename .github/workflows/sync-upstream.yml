@@ -1,0 +1,39 @@
+# Weekly: if the original repo has new commits, open a PR that merges them into macos.
+name: Sync upstream
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: macos
+          fetch-depth: 0
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/toyxyz/toyxyz_RGBMocap.git
+          git fetch upstream main
+          echo "NEW=$(git rev-list --count HEAD..upstream/main)" >> "$GITHUB_ENV"
+      - name: Open sync PR
+        if: env.NEW != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="upstream-sync-$(git rev-parse --short upstream/main)"
+          if git ls-remote --exit-code origin "refs/heads/$branch" >/dev/null; then echo "PR branch exists"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          if git merge --no-edit upstream/main; then note="Merged cleanly."; else
+            git merge --abort; git checkout -B "$branch" upstream/main
+            note="Merge conflicts with macos: resolve locally with tools/sync_upstream.sh."; fi
+          git push origin "$branch"
+          gh pr create --base macos --head "$branch" \
+            --title "Sync upstream ($NEW new commits)" \
+            --body "Automated sync from toyxyz/toyxyz_RGBMocap main. $note Run tests_macos before merging."
