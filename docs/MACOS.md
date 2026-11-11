@@ -80,7 +80,9 @@ Unified memory lets large models load, but long clips use a lot of RAM.
 | 3D viewport (bones, SMPL-X mesh, characters) | Working on GL 4.1 with CPU skinning. Verified with synthetic meshes; real SMPL-X playback needs the registered SMPL-X file. |
 | Find person (YOLOv8x + OSNet on MPS) | Working (sample clip: 2 people found) |
 | Motion correction (foot/hand locks) | Working; arm64 output identical to the x86 SSE build |
-| ExMR (Sapiens2, SAM 3D Body, HaMeR, ExMR) | Runtime installed (torch 2.8 MPS). End-to-end run pending model files. |
+| ExMR: tracking + Sapiens2 1B keypoints | Working on MPS (690 frames in 10 m 14 s on an M4 Pro; keypoints checked on frames) |
+| ExMR: SAM 3D Body features | Working on MPS (~1.9 frames/s; matches CPU with cosine 0.999999). MHR's float64 skeleton runs on the CPU. |
+| ExMR: HaMeR hand features, final ExMR solve | Pending the registered MANO and SMPL-X files |
 | FBX/BVH/.blend export, retargeting | Uses `/Applications/Blender.app`; pending a reconstructed motion |
 | Bone Stream to Blender | Add-on installed in Blender 5.2; same-machine `127.0.0.1:49168` connection; pending a reconstructed motion |
 | GVHMR, FlowHMR, GEM-X | Not yet tested |
