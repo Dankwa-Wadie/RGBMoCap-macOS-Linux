@@ -54,3 +54,12 @@ def test_float64_copy_to_cpu():
     assert y.device.type == 'cpu' and y.dtype == torch.float64
     z = x.to(device='cpu', dtype=torch.float64)
     assert z.device.type == 'cpu' and z.dtype == torch.float64
+
+
+def test_jit_load_and_device_type(tmp_path):
+    m = torch.jit.script(torch.nn.Linear(2, 2)); m.save(str(tmp_path / 'm.pt'))
+    loaded = torch.jit.load(str(tmp_path / 'm.pt'), map_location='cuda')
+    assert next(loaded.parameters()).device.type == 'mps'
+    assert isinstance(torch.cuda.device(0), torch.cuda.device)
+    with torch.cuda.device(0):
+        pass

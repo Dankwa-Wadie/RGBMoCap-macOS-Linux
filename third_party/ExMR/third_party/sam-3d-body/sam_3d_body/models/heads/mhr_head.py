@@ -5,6 +5,7 @@ import warnings
 from typing import Optional
 
 import roma
+import sys
 import torch
 import torch.nn as nn
 
@@ -113,10 +114,13 @@ class MHRHead(nn.Module):
         else:
             # RGB MoCap: Python's Unicode-aware file IO supports Windows
             # installation folders that TorchScript's native fopen rejects.
+            # RGB MoCap macOS: MHR's TorchScript skeleton runs in float64, which the Apple
+            # GPU (MPS) lacks. Keep MHR on the CPU there (full precision); see forward.
+            self.mhr_on_cpu = sys.platform == "darwin"
             with open(mhr_model_path, "rb") as model_file:
                 self.mhr = torch.jit.load(
                     model_file,
-                    map_location=("cuda" if torch.cuda.is_available() else "cpu"),
+                    map_location=("cpu" if self.mhr_on_cpu else "cuda" if torch.cuda.is_available() else "cpu"),
                 )
 
         for param in self.mhr.parameters():
@@ -227,9 +231,21 @@ class MHRHead(nn.Module):
             # Zero out non-hand parameters
             model_params[:, self.nonhand_param_idxs] = 0
 
-        curr_skinned_verts, curr_skel_state = self.mhr(
-            shape_params, model_params, expr_params
-        )
+        if getattr(self, "mhr_on_cpu", False):
+            device = model_params.device
+            if not getattr(self, "_mhr_pinned_cpu", False):
+                # model.to(device) moved MHR's buffers to the GPU along with the network.
+                self.mhr.to("cpu")
+                self._mhr_pinned_cpu = True
+            curr_skinned_verts, curr_skel_state = self.mhr(
+                shape_params.cpu(), model_params.cpu(),
+                expr_params.cpu() if expr_params is not None else None,
+            )
+            curr_skinned_verts, curr_skel_state = curr_skinned_verts.to(device), curr_skel_state.to(device)
+        else:
+            curr_skinned_verts, curr_skel_state = self.mhr(
+                shape_params, model_params, expr_params
+            )
         curr_joint_coords, curr_joint_quats, _ = torch.split(
             curr_skel_state, [3, 4, 1], dim=2
         )

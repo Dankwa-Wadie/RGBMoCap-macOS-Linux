@@ -116,6 +116,15 @@ def install():
 
     torch.load = load
 
+    original_jit_load = torch.jit.load
+
+    def jit_load(f, map_location=None, *args, **kwargs):
+        if map_location is None or isinstance(map_location, (str, torch.device)):
+            map_location = _map(map_location) if map_location is not None else 'cpu'
+        return original_jit_load(f, map_location, *args, **kwargs)
+
+    torch.jit.load = jit_load
+
     original_autocast = torch.autocast
 
     class autocast(original_autocast):
@@ -224,7 +233,7 @@ def install():
         manual_seed=seed, manual_seed_all=seed, is_bf16_supported=lambda *a, **k: on_mps,
         Event=Event, Stream=Stream, current_stream=lambda device=None: Stream(),
         default_stream=lambda device=None: Stream(), stream=lambda s=None: contextlib.nullcontext(),
-        device=lambda d=None: contextlib.nullcontext(),
+        device=_DeviceContext, device_of=_DeviceContext,
         memory_summary=lambda *a, **k: 'MPS allocated %.2f GiB' % (allocated() / 1024 ** 3),
     )
     for key, value in replacements.items():
@@ -241,6 +250,19 @@ def install():
 
     CudaAsMps().__enter__()
     _INSTALLED = True
+
+
+class _DeviceContext:
+    """``torch.cuda.device(...)`` as a no-op context manager that is still a type."""
+
+    def __init__(self, device=None):
+        self.idx = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 class _AfterTorchImport:

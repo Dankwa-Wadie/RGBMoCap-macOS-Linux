@@ -47,7 +47,8 @@ def activate():
         if not (root/name).is_dir():raise RuntimeError('ExMR runtime is missing. Repair the application installation.')
     for path in (root,root/'third_party/sapiens2',root/'third_party/hamer'):
         if str(path) not in sys.path:sys.path.insert(0,str(path))
-    os.environ.update(PYOPENGL_PLATFORM='win32',WANDB_MODE='disabled',PYTHONNOUSERSITE='1')
+    os.environ.update(WANDB_MODE='disabled',PYTHONNOUSERSITE='1')
+    if sys.platform=='win32':os.environ['PYOPENGL_PLATFORM']='win32'  # macOS: PyOpenGL's default (CGL)
     weights=HOME/'cache/exmr/assets';weights.mkdir(parents=True,exist_ok=True)
     for key,name in LINKS.items():
         source=BY_KEY[key].path
