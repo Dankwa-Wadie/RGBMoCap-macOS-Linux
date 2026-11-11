@@ -172,7 +172,7 @@ class LatestFrame:
             return self.frame is not None, self.frame, self.id
 
 
-def draw(frame, results, fps):
+def draw(frame, results, fps, caption=None):
     face, pose, hands = results
     h, w = frame.shape[:2]
     pts = lambda lms: [(int(l.x * w), int(l.y * h)) for l in lms]
@@ -187,7 +187,7 @@ def draw(frame, results, fps):
     if face.face_landmarks:
         for x, y in pts(face.face_landmarks[0])[::6]:
             cv2.circle(frame, (x, y), 1, (200, 200, 255), -1)
-    cv2.putText(frame, f'{fps:4.1f} fps  ->  Blender udp:{PORT}   [q] quit', (12, 28),
+    cv2.putText(frame, caption or f'{fps:4.1f} fps  ->  Blender udp:{PORT}   [q] quit', (12, 28),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     return frame
 
@@ -198,9 +198,13 @@ def main():
     ap.add_argument('--video', type=Path)
     ap.add_argument('--host', default='127.0.0.1')
     ap.add_argument('--port', type=int, default=PORT)
+    ap.add_argument('--app', action='store_true',
+                    help='RGB MoCap app mode: send b"P"+packet and b"F"+JPEG preview datagrams to --port '
+                         '(the app forwards to Blender, records and plays back)')
     ap.add_argument('--width', type=int, default=1280)
     ap.add_argument('--no-preview', action='store_true')
     ap.add_argument('--no-smooth', action='store_true')
+    ap.add_argument('--no-overlay', action='store_true', help='app mode: send the plain camera image')
     ap.add_argument('--frames', type=int, default=0, help='stop after N frames (testing)')
     ap.add_argument('--snapshots', type=Path, help='save an annotated camera frame here every second (diagnostics)')
     ap.add_argument('--crop', help='x,y,w,h region of the frame to track (e.g. a screen recording)')
@@ -217,6 +221,8 @@ def main():
                  'System Settings > Privacy & Security > Camera, then retry.')
     tracker = Tracker(smooth=not args.no_smooth)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # macOS limits a datagram to the send buffer (9 KB by default); previews need ~40 KB.
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
     dump = args.dump.open('w') if args.dump else None
     start = time.monotonic(); count = 0; fps = 0.0; last = start; last_snapshot = start
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -237,7 +243,18 @@ def main():
             packet, results = tracker(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), t_ms)
             packet['frame'] = count
             data = json.dumps(packet, separators=(',', ':')).encode()
-            sock.sendto(data, (args.host, args.port))
+            if args.app:
+                sock.sendto(b'P' + data, (args.host, args.port))
+                small = cv2.resize(draw(frame.copy(), results, fps, f'{fps:4.1f} fps') if not args.no_overlay else frame,
+                                   (640, int(frame.shape[0] * 640 / frame.shape[1])))
+                ok_jpg, jpg = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if ok_jpg and len(jpg) < 60000:
+                    try:
+                        sock.sendto(b'F' + jpg.tobytes(), (args.host, args.port))
+                    except OSError:
+                        pass  # a dropped preview frame is harmless
+            else:
+                sock.sendto(data, (args.host, args.port))
             if dump:
                 dump.write(data.decode() + '\n')
             count += 1

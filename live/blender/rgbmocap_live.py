@@ -233,14 +233,29 @@ class Receiver:
         self.sock = None
 
     def poll(self):
+        """Newest pose packet; control commands (from the RGB MoCap app) run as they arrive."""
         packet = None
         while True:
             try:
                 data, _ = self.sock.recvfrom(1 << 20)
-                packet = data
             except (BlockingIOError, OSError):
                 break
-        return json.loads(packet) if packet else None
+            value = json.loads(data)
+            if 'cmd' in value:
+                self.command(value)
+            else:
+                packet = value
+        return packet
+
+    def command(self, value):
+        if value['cmd'] == 'bake_take':
+            # Bake a recorded (optionally trimmed) take saved by the app: JSON lines of packets.
+            rows = [json.loads(line) for line in open(value['path'], encoding='utf-8')]
+            first, last = value.get('in', 0), value.get('out', len(rows) - 1)
+            self.recording = rows[first:last + 1]
+            scene = bpy.context.scene
+            frames = self.bake(round(scene.render.fps / scene.render.fps_base))
+            print(f'RGB MoCap Live: baked {frames} frames from {value["path"]}')
 
     def tick(self):
         if self.sock is None:

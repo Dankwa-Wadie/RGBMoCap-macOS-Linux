@@ -614,6 +614,9 @@ def build_workspace(w):
     file_menu.addAction("Open Project Folder", w.open_folder)
     file_menu.addSeparator()
     file_menu.addAction("Exit", w.close)
+    live_menu = w.menuBar().addMenu("Live")
+    w.live_action = live_menu.addAction("Live Capture (Webcam)", w.toggle_live)
+    w.live_action.setShortcut("Ctrl+L")
     help_menu = w.menuBar().addMenu("Help")
     w.check_system_action = help_menu.addAction("Check System", lambda: w.start_jobs([("diagnose", [])]))
     help_menu.addAction("Controls", lambda: QMessageBox.information(w, "Workspace Controls",

@@ -40,6 +40,7 @@ STAGES["handflow"] = "Infer Fingers / HandFlow"
 STAGES['correct'] = 'Motion Correction'
 from .workspace_ui import build_workspace
 from .people_ui import PeopleWorkspace
+from .live_ui import LiveWorkspace
 from .stream_ui import StreamWorkspace
 from .project_save_ui import ProjectSaving
 from .project_workspace_ui import ModelWorkspace
@@ -382,7 +383,7 @@ from .prompthmr_ui import PromptHMRWorkspace
 from .pear_ui import PearWorkspace
 from .preview_export_ui import PreviewExportWorkspace
 
-class MainWindow(PreviewExportWorkspace,PearWorkspace,GemXWorkspace,PromptHMRWorkspace,MammaWorkspace,CharacterWorkspace,ModelWorkspace,ProjectSaving,PeopleWorkspace,StreamWorkspace,QMainWindow):
+class MainWindow(LiveWorkspace,PreviewExportWorkspace,PearWorkspace,GemXWorkspace,PromptHMRWorkspace,MammaWorkspace,CharacterWorkspace,ModelWorkspace,ProjectSaving,PeopleWorkspace,StreamWorkspace,QMainWindow):
     def __init__(self, video: Path | None = None):
         super().__init__()
         self.setWindowTitle("RGB MoCap | Motion Workspace")
