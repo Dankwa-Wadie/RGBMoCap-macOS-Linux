@@ -156,6 +156,8 @@ class LivePanel(QWidget):
         self.mirror = QCheckBox('Mirror view'); self.mirror.setChecked(True)
         self.mirror.setToolTip('Show the camera like a mirror (display only; tracking and Blender are unaffected)')
         self.mirror.toggled.connect(lambda _: self.last_jpeg and self.show_jpeg(self.last_jpeg))
+        self.mirror.toggled.connect(lambda _: self.sync_backdrop(force=True))
+        self._backdrop_sync = 0.0
         self.last_jpeg = None
         self.backdrop = QCheckBox('Webcam background in Blender')
         self.backdrop.setToolTip('Show the live camera image on a backdrop behind the avatar in Blender')
@@ -285,6 +287,7 @@ class LivePanel(QWidget):
             elif data[:1] == b'F' and not self.playing:
                 self.show_jpeg(data[1:])
                 if self.backdrop.isChecked() and self.send_blender.isChecked():
+                    self.sync_backdrop()
                     self.out.writeDatagram(data[1:], QHostAddress.LocalHost, BLENDER_PORT)
                 if self.recorder is not None and self.packet is not None and not self.paused:
                     self.recorder.add(self.packet, data[1:])
@@ -292,6 +295,13 @@ class LivePanel(QWidget):
     def send(self, payload: bytes):
         if self.send_blender.isChecked():
             self.out.writeDatagram(payload, QHostAddress.LocalHost, BLENDER_PORT)
+
+    def sync_backdrop(self, force=False):
+        """Keep Blender's backdrop mirrored like the preview (resent every 2 s: UDP may drop)."""
+        now = time.monotonic()
+        if force or now - self._backdrop_sync > 2.0:
+            self._backdrop_sync = now
+            self.control({'cmd': 'backdrop', 'mirror': self.mirror.isChecked()})
 
     def control(self, command):
         self.out.writeDatagram(json.dumps(command).encode(), QHostAddress.LocalHost, BLENDER_PORT)

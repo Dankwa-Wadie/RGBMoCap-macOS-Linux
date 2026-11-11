@@ -235,7 +235,7 @@ class Receiver:
     def __init__(self):
         self.sock = None; self.avatar = None; self.recording = None; self.last = None; self.frames = 0
         self.live_keys = None  # while recording live: {'action', 't0', 'fps', 'start', 'frame', 'count'}
-        self.backdrop_jpeg = None; self.backdrop_at = 0.0
+        self.backdrop_jpeg = None; self.backdrop_at = 0.0; self.backdrop_mirror = False
 
     def start(self, arm, port=PORT):
         self.avatar = Avatar(arm)
@@ -289,7 +289,7 @@ class Receiver:
         height = 2.2; width = height * image.size[0] / max(1, image.size[1])
         mesh = bpy.data.meshes.new('RGBMoCap_Backdrop')
         mesh.from_pydata([(-width / 2, 0, 0), (width / 2, 0, 0), (width / 2, 0, height), (-width / 2, 0, height)], [], [(0, 1, 2, 3)])
-        mesh.uv_layers.new().data.foreach_set('uv', [0, 0, 1, 0, 1, 1, 0, 1])
+        mesh.uv_layers.new().data.foreach_set('uv', self.backdrop_uv())
         plane = bpy.data.objects.new('RGBMoCap_Backdrop', mesh)
         plane.location = (arm.location.x if arm else 0, (arm.location.y if arm else 0) + 1.6, 0)
         material = bpy.data.materials.new('RGBMoCap_Webcam'); material.use_nodes = True
@@ -300,6 +300,18 @@ class Receiver:
         links.new(tex.outputs[0], emit.inputs[0]); links.new(emit.outputs[0], out.inputs[0])
         mesh.materials.append(material)
         bpy.context.scene.collection.objects.link(plane)
+
+    def backdrop_uv(self):
+        # Mirrored: the image's right edge on the plane's left, like a mirror.
+        return [1, 0, 0, 0, 0, 1, 1, 1] if self.backdrop_mirror else [0, 0, 1, 0, 1, 1, 0, 1]
+
+    def set_backdrop_mirror(self, on):
+        if on == self.backdrop_mirror:
+            return
+        self.backdrop_mirror = on
+        plane = bpy.data.objects.get('RGBMoCap_Backdrop')
+        if plane is not None and plane.data.uv_layers:
+            plane.data.uv_layers[0].data.foreach_set('uv', self.backdrop_uv()); plane.data.update()
 
     def driven_shape_keys(self):
         keys = set()
@@ -330,7 +342,9 @@ class Receiver:
         scene.frame_end = max(scene.frame_end, frame)
 
     def command(self, value):
-        if value['cmd'] == 'live_record_start' and self.avatar is not None:
+        if value['cmd'] == 'backdrop':
+            self.set_backdrop_mirror(bool(value.get('mirror')))
+        elif value['cmd'] == 'live_record_start' and self.avatar is not None:
             arm = self.avatar.arm; arm.animation_data_create()
             from datetime import datetime
             action = bpy.data.actions.new('RGBMoCap_Live_' + datetime.now().strftime('%H%M%S'))
