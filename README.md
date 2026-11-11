@@ -1,6 +1,56 @@
-# RGB MoCap
+# RGB MoCap for macOS and Linux
 
 ![RGB MoCap workspace showing video tracking and a 3D motion preview](docs/images/rgbmocap-workspace.png)
+
+**A macOS (Apple Silicon) and Linux port of [RGB MoCap](https://github.com/toyxyz/toyxyz_RGBMocap)**,
+the app that turns video into editable human animation, with AI processing
+running locally. On a Mac, inference runs on the Apple GPU (Metal/MPS), and
+the results export to Blender or stream into it live.
+
+This is an unofficial fork. The original Windows app is by toyxyz and the RGB
+MoCap contributors. It tracks the original repository, and upstream updates are
+merged in through a weekly pull request.
+
+| Platform | Status |
+| --- | --- |
+| **macOS 14+ on Apple Silicon (M1–M4)** | Supported. The app, viewport, motion correction and the ExMR pipeline run natively. See [docs/MACOS.md](docs/MACOS.md). |
+| **Linux** | In progress. A setup script and testing are still to come. |
+| Windows | Use the [original repository](https://github.com/toyxyz/toyxyz_RGBMocap). |
+
+## Install on macOS
+
+```sh
+brew install uv cmake ffmpeg jpeg-turbo
+git clone https://github.com/Dankwa-Wadie/RGBMoCap-macOS-Linux.git
+cd RGBMoCap-macOS-Linux
+tools/setup_macos.sh --blender-addon
+./RGBMoCap.command
+```
+
+Setup builds the runtimes, compiles motion correction for arm64, downloads the
+public model files, and installs the Blender Bone Stream add-on. Two body models
+need a free account, and their licenses forbid bundling them:
+[SMPL-X](https://smpl-x.is.tue.mpg.de/) and [MANO](https://mano.is.tue.mpg.de/).
+Download `models_smplx_v1_1.zip` and `mano_v1_2.zip` into `~/Downloads` and
+setup imports them. SAM 3D Body needs one-time access on
+[Hugging Face](https://huggingface.co/facebook/sam-3d-body-dinov3) and
+`hf auth login`. Full details, including what is verified and what is not
+supported on macOS, are in [docs/MACOS.md](docs/MACOS.md).
+
+## Model support on macOS
+
+| Model | macOS |
+| --- | --- |
+| ExMR (default) | Every stage runs on the Apple GPU. The final solve needs SMPL-X. |
+| GVHMR, FlowHMR, GEM-X | Not yet tested |
+| MAMMA, PromptHMR, SAM 3.1, PEAR live | Not supported (NVIDIA CUDA kernels or Windows capture) |
+
+---
+
+# Original RGB MoCap documentation (Windows)
+
+The rest of this README is the upstream documentation. Its install commands
+(`install.cmd`, `RGBMoCap.cmd`) are for Windows; on macOS, use the steps above.
 
 A native Windows app that turns video into editable human animation. Review and
 export motion with AI processing running locally.

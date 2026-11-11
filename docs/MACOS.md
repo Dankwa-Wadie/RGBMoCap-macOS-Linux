@@ -12,8 +12,8 @@ Homebrew, and about 15 GB free for the base runtimes and ExMR's model files.
 
 ```sh
 brew install uv cmake ffmpeg jpeg-turbo
-git clone https://github.com/toyxyz/toyxyz_RGBMocap.git
-cd toyxyz_RGBMocap
+git clone https://github.com/Dankwa-Wadie/RGBMoCap-macOS-Linux.git
+cd RGBMoCap-macOS-Linux
 tools/setup_macos.sh --blender-addon      # add --all for the FlowHMR/HandFlow/HTD runtimes
 ./RGBMoCap.command                        # or double-click RGBMoCap.command in Finder
 ```
