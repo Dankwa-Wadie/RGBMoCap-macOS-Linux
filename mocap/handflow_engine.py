@@ -28,7 +28,7 @@ def infer(project,emit,n):
     from .paths import UPSTREAM,COMPAT,MODELS
     from .models import BY_KEY
     from .compute_policy import retry_cuda
-    if sys.platform=='win32':os.environ['PYOPENGL_PLATFORM']='win32'  # macOS: PyOpenGL default
+    if sys.platform in ('win32','darwin'):os.environ['PYOPENGL_PLATFORM']=sys.platform  # upstream defaults to EGL
     os.environ['WANDB_MODE']='disabled'
     os.environ['YOLO_CONFIG_DIR']=str(MODELS/'handflow/settings')
     # Only pinned/checksummed official weights enter this worker. Upstream

@@ -125,6 +125,28 @@ def install():
 
     torch.jit.load = jit_load
 
+    # ``with torch.device('cuda'):`` and torch.set_default_device('cuda') make CUDA the
+    # default for everything created inside, including storages torch.load allocates.
+    import torch.utils._device as device_module
+    original_context_init = device_module.DeviceContext.__init__
+
+    def context_init(self, device):
+        original_context_init(self, _map(device))
+
+    device_module.DeviceContext.__init__ = context_init
+
+    # Checkpoints saved on CUDA restore their storages to "cuda" whenever a map_location
+    # function returns None (as Lightning's does): restore those onto the CPU instead.
+    import torch.serialization as serialization
+    original_restore = serialization.default_restore_location
+
+    def default_restore_location(storage, location):
+        if isinstance(location, str) and (location == 'cuda' or location.startswith('cuda:')):
+            location = 'cpu'
+        return original_restore(storage, location)
+
+    serialization.default_restore_location = default_restore_location
+
     original_autocast = torch.autocast
 
     class autocast(original_autocast):

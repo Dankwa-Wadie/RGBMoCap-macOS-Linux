@@ -48,7 +48,8 @@ def activate():
     for path in (root,root/'third_party/sapiens2',root/'third_party/hamer'):
         if str(path) not in sys.path:sys.path.insert(0,str(path))
     os.environ.update(WANDB_MODE='disabled',PYTHONNOUSERSITE='1')
-    if sys.platform=='win32':os.environ['PYOPENGL_PLATFORM']='win32'  # macOS: PyOpenGL's default (CGL)
+    # Upstream renderers default to EGL (Linux); use the native backend on Windows and macOS.
+    if sys.platform in ('win32','darwin'):os.environ['PYOPENGL_PLATFORM']=sys.platform
     weights=HOME/'cache/exmr/assets';weights.mkdir(parents=True,exist_ok=True)
     for key,name in LINKS.items():
         source=BY_KEY[key].path

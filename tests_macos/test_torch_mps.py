@@ -63,3 +63,17 @@ def test_jit_load_and_device_type(tmp_path):
     assert isinstance(torch.cuda.device(0), torch.cuda.device)
     with torch.cuda.device(0):
         pass
+
+
+def test_device_context_and_checkpoint(tmp_path):
+    torch.save({'w': torch.ones(3)}, tmp_path / 'ckpt.pt')
+    with torch.device('cuda'):
+        x = torch.zeros(2)
+        state = torch.load(tmp_path / 'ckpt.pt', map_location=lambda storage, loc: storage)
+    assert x.device.type == 'mps' and state['w'].sum() == 3
+
+
+def test_cuda_saved_storage_with_none_map_location(tmp_path):
+    import torch.serialization as serialization
+    # A CUDA-saved storage whose map_location function returns None.
+    assert serialization.default_restore_location(torch.UntypedStorage(4), 'cuda:0').device.type == 'cpu'

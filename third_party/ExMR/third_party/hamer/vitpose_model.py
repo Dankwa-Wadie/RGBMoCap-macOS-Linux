@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from mmpose.apis import inference_top_down_pose_model, init_pose_model, process_mmdet_results, vis_pose_result
 
-os.environ["PYOPENGL_PLATFORM"] = "egl"
+os.environ.setdefault("PYOPENGL_PLATFORM", "egl")  # RGB MoCap: keep a platform chosen by the app
 
 # project root directory
 ROOT_DIR = "./"
