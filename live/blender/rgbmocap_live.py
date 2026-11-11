@@ -17,6 +17,7 @@ bl_info = {
 }
 
 import json
+import math
 import socket
 
 import bpy
@@ -98,6 +99,7 @@ class Avatar:
             if has(*names):
                 hand, middle, index, little = (rest(n) for n in names)
                 self.rest_frames[side + 'Hand'] = self.hand_frame(middle - hand, index - little)
+        self.lying = False
         self.last_basis = {}   # bone name -> last tracked basis rotation
         self.weight = {}       # bone name -> 0..1 tracking weight (eases in/out)
         self.shape_targets = [o for o in bpy.data.objects if o.type == 'MESH' and o.data.shape_keys
@@ -121,7 +123,13 @@ class Avatar:
             up = self.to_local @ Vector((0, 0, 1))
             if ok(L_SH, R_SH):
                 legs_seen = ok(L_KN, R_KN) or ok(L_KN, L_AN) or ok(R_KN, R_AN)
-                if ok(L_HIP, R_HIP) and legs_seen:
+                if ok(L_HIP, R_HIP):
+                    # Upright (standing/sitting) vs lying: past ~45 deg from vertical the whole
+                    # avatar follows the torso; back under ~35 deg the seated rule returns.
+                    torso = ((P[L_SH] + P[R_SH]) / 2 - (P[L_HIP] + P[R_HIP]) / 2).normalized()
+                    tilt = math.degrees(torso.angle(up)) if torso.length else 0.0
+                    self.lying = tilt > (35.0 if self.lying else 45.0)
+                if ok(L_HIP, R_HIP) and (legs_seen or self.lying):
                     mid_hip = (P[L_HIP] + P[R_HIP]) / 2
                     targets['hips'] = ('frame', frame_from(P[L_HIP] - P[R_HIP], mid_sh - mid_hip))
                     targets['chest'] = ('frame', frame_from(P[L_SH] - P[R_SH], mid_sh - mid_hip))
@@ -131,9 +139,8 @@ class Avatar:
                     mid_hip = (P[L_HIP] + P[R_HIP]) / 2
                     targets['chest'] = ('frame', frame_from(P[L_SH] - P[R_SH], mid_sh - mid_hip))
                 else:
-                    # Hips out of view: keep the pelvis upright, turned with the shoulders.
-                    side = P[L_SH] - P[R_SH]; side = side - side.project(up)
-                    targets['hips'] = ('frame', frame_from(side, up))
+                    # Hips out of view (or switched off): the pelvis and legs hold still;
+                    # only the chest follows the shoulders.
                     targets['chest'] = ('frame', frame_from(P[L_SH] - P[R_SH], up))
             for h, (a, b) in LIMBS.items():
                 if ok(a, b):
@@ -141,7 +148,12 @@ class Avatar:
             if ok(NOSE, L_EAR, R_EAR) or ok(NOSE, L_SH, R_SH):
                 ear_x = P[L_EAR] - P[R_EAR]; forward = P[NOSE] - (P[L_EAR] + P[R_EAR]) / 2
                 targets['head'] = ('frame', frame_from(ear_x, forward.cross(ear_x)))
+        valid_now = packet.get('pose_valid') or []
         for side, points in (packet.get('hands') or {}).items():
+            # A hand only moves with a tracked wrist; otherwise it would twist on a resting arm.
+            wrist = L_WR if side == 'left' else R_WR
+            if not (pose and valid_now and valid_now[wrist]):
+                continue
             H = [self.to_local @ Vector(p) for p in points]
             targets[side + 'Hand'] = ('frame', self.hand_frame(H[9] - H[0], H[5] - H[17]))
             for suffix, (a, b) in FINGERS.items():

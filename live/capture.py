@@ -33,6 +33,14 @@ MODELS = ROOT / 'models' / 'live'
 PORT = 49170
 POSE_WRISTS = {'left': 15, 'right': 16}
 STABLE_FRAMES = 6  # ~0.5 s at webcam rates before a newly seen landmark is trusted
+LEGS = range(23, 33)
+
+
+def landmark_valid(index, visibility, x, y):
+    """Legs get a strict rule (MediaPipe invents legs outside the picture); the rest a normal one."""
+    if index in LEGS:
+        return visibility > 0.75 and 0.03 < x < 0.97 and 0.03 < y < 0.97
+    return visibility > 0.5 and 0.0 < x < 1.0 and 0.0 < y < 1.0
 
 
 class OneEuro:
@@ -118,7 +126,8 @@ class Tracker:
             # the picture, and that has held for STABLE_FRAMES frames; off-frame legs are
             # otherwise hallucinated and flicker in at the image edge. Losing it is immediate.
             image_lms = pose.pose_landmarks[0]
-            raw = [l.visibility > 0.75 and 0.03 < l.x < 0.97 and 0.03 < l.y < 0.97 for l in image_lms]
+            raw = [landmark_valid(i, l.visibility, l.x, l.y) for i, l in enumerate(image_lms)]
+            packet['pose_image'] = [[round(l.x, 3), round(l.y, 3)] for l in image_lms]
             if self.streak is None or len(self.streak) != len(raw):
                 self.streak = [0] * len(raw)
             self.streak = [s + 1 if r else 0 for s, r in zip(self.streak, raw)]
@@ -204,6 +213,8 @@ def main():
     ap.add_argument('--width', type=int, default=1280)
     ap.add_argument('--no-preview', action='store_true')
     ap.add_argument('--no-smooth', action='store_true')
+    ap.add_argument('--track', choices=('full', 'upper', 'head'), default='full',
+                    help='body parts that drive the avatar (upper: legs still; head: head and face only)')
     ap.add_argument('--no-overlay', action='store_true', help='app mode: send the plain camera image')
     ap.add_argument('--frames', type=int, default=0, help='stop after N frames (testing)')
     ap.add_argument('--snapshots', type=Path, help='save an annotated camera frame here every second (diagnostics)')
@@ -242,6 +253,9 @@ def main():
             t_ms = int(count * 1000 / video_fps) if args.video else int((time.monotonic() - start) * 1000)
             packet, results = tracker(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), t_ms)
             packet['frame'] = count
+            if args.track != 'full':
+                from track_modes import apply_mode
+                packet = apply_mode(packet, args.track)
             data = json.dumps(packet, separators=(',', ':')).encode()
             if args.app:
                 sock.sendto(b'P' + data, (args.host, args.port))

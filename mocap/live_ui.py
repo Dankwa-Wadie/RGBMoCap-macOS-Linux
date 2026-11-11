@@ -138,13 +138,21 @@ class LivePanel(QWidget):
         self.pause_button.toggled.connect(self.set_paused)
         self.record_button = QPushButton('● Record'); self.record_button.setCheckable(True)
         self.record_button.toggled.connect(self.toggle_record)
+        self.track = QComboBox(); self.track.setToolTip(
+            'Which body parts drive the avatar. Use Upper body when seated or partly in frame, '
+            'Head & face when lying down or when body tracking is unreliable.')
+        sys.path.insert(0, str(ROOT / 'live'))
+        from track_modes import MODES, apply_mode
+        self.apply_mode = apply_mode
+        for key, label in MODES.items():
+            self.track.addItem(label, key)
         self.blender_button = QPushButton('Open Avatar in Blender…')
         self.blender_button.setToolTip('Open a VRM avatar (default: Seed-san) in Blender with the live receiver')
         self.blender_button.clicked.connect(self.open_blender)
         self.send_blender = QCheckBox('Send to Blender'); self.send_blender.setChecked(True)
         self.key_blender = QCheckBox('Key in Blender while recording'); self.key_blender.setChecked(True)
         self.key_blender.setToolTip('Record straight into a new Blender Action as you perform (Blender must be open)')
-        for w in (self.camera, self.start_button, self.pause_button, self.record_button, self.send_blender,
+        for w in (self.camera, self.track, self.start_button, self.pause_button, self.record_button, self.send_blender,
                   self.key_blender, self.blender_button):
             row.addWidget(w)
         row.addStretch(1)
@@ -262,10 +270,10 @@ class LivePanel(QWidget):
             if not data:
                 continue
             if data[:1] == b'P':
-                self.packet = json.loads(data[1:])
+                self.packet = self.apply_mode(json.loads(data[1:]), self.track.currentData())
                 self.received += 1
                 if not self.paused and not self.playing:
-                    self.send(data[1:])
+                    self.send(json.dumps(self.packet, separators=(',', ':')).encode())
             elif data[:1] == b'F' and not self.playing:
                 self.show_jpeg(data[1:])
                 if self.recorder is not None and self.packet is not None and not self.paused:

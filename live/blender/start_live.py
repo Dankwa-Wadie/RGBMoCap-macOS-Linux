@@ -61,7 +61,10 @@ def diagnostics():
                 bones={h: round(av.bones[h].rotation_quaternion.angle * 57.2958, 1) for h in
                        ('hips', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg', 'leftUpperArm', 'rightUpperArm')
                        if h in av.bones},
-                weights={h: round(av.weight.get(av.bones[h].name, 0), 2) for h in ('leftUpperLeg', 'rightUpperLeg') if h in av.bones})
+                weights={h: round(av.weight.get(av.bones[h].name, 0), 2) for h in ('leftUpperLeg', 'rightUpperLeg') if h in av.bones},
+                all_bones={h: round(pb.rotation_quaternion.angle * 57.2958, 1) for h, pb in av.bones.items()},
+                all_weights={h: round(av.weight.get(pb.name, 0), 2) for h, pb in av.bones.items()},
+                pose_valid=p.get('pose_valid'), hands=sorted((p.get('hands') or {})), face='face' in p)
     (folder / f'blender_{stamp:.0f}.json').write_text(json.dumps(info))
     window = bpy.context.window_manager.windows[0]
     area = next((a for a in window.screen.areas if a.type == 'VIEW_3D'), None)
