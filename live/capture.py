@@ -245,10 +245,13 @@ def main():
             data = json.dumps(packet, separators=(',', ':')).encode()
             if args.app:
                 sock.sendto(b'P' + data, (args.host, args.port))
-                small = cv2.resize(draw(frame.copy(), results, fps, f'{fps:4.1f} fps') if not args.no_overlay else frame,
-                                   (640, int(frame.shape[0] * 640 / frame.shape[1])))
-                ok_jpg, jpg = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                if ok_jpg and len(jpg) < 60000:
+                shown = draw(frame.copy(), results, fps, f'{fps:4.1f} fps') if not args.no_overlay else frame
+                for width, quality in ((960, 75), (640, 70)):  # largest that fits one datagram
+                    small = cv2.resize(shown, (width, int(frame.shape[0] * width / frame.shape[1])))
+                    ok_jpg, jpg = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, quality])
+                    if ok_jpg and len(jpg) < 63000:
+                        break
+                if ok_jpg and len(jpg) < 63000:
                     try:
                         sock.sendto(b'F' + jpg.tobytes(), (args.host, args.port))
                     except OSError:

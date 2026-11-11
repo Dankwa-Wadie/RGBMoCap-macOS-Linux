@@ -220,6 +220,7 @@ class Avatar:
 class Receiver:
     def __init__(self):
         self.sock = None; self.avatar = None; self.recording = None; self.last = None; self.frames = 0
+        self.live_keys = None  # while recording live: {'action', 't0', 'fps', 'start', 'frame', 'count'}
 
     def start(self, arm, port=PORT):
         self.avatar = Avatar(arm)
@@ -247,8 +248,52 @@ class Receiver:
                 packet = value
         return packet
 
+    def driven_shape_keys(self):
+        keys = set()
+        for binds in self.avatar.expressions.values():
+            keys.update((o, k) for o, k, _ in binds)
+        for obj in self.avatar.shape_targets:
+            for kb in obj.data.shape_keys.key_blocks[1:]:
+                if kb.name[:1].islower() and any(kb.name.startswith(p) for p in ('eye', 'mouth', 'jaw', 'brow', 'cheek', 'nose', 'tongue')):
+                    keys.add((obj.name, kb.name))
+        return keys
+
+    def key_live(self, packet):
+        state = self.live_keys
+        if state['t0'] is None:
+            state['t0'] = packet['t']
+        frame = state['start'] + round((packet['t'] - state['t0']) * state['fps'])
+        if frame == state['frame']:
+            return
+        state['frame'] = frame; state['count'] += 1
+        for pb in self.avatar.bones.values():
+            pb.keyframe_insert('rotation_quaternion', frame=frame, group=pb.name)
+        for obj_name, key in state['shape_keys']:
+            obj = bpy.data.objects.get(obj_name)
+            if obj is not None and key in obj.data.shape_keys.key_blocks:
+                obj.data.shape_keys.key_blocks[key].keyframe_insert('value', frame=frame)
+        scene = bpy.context.scene
+        scene.frame_current = frame
+        scene.frame_end = max(scene.frame_end, frame)
+
     def command(self, value):
-        if value['cmd'] == 'bake_take':
+        if value['cmd'] == 'live_record_start' and self.avatar is not None:
+            arm = self.avatar.arm; arm.animation_data_create()
+            from datetime import datetime
+            action = bpy.data.actions.new('RGBMoCap_Live_' + datetime.now().strftime('%H%M%S'))
+            arm.animation_data.action = action
+            for obj in self.avatar.shape_targets:  # fresh shape-key actions too
+                obj.data.shape_keys.animation_data_create()
+                obj.data.shape_keys.animation_data.action = bpy.data.actions.new(action.name + '_' + obj.name)
+            scene = bpy.context.scene
+            self.live_keys = dict(action=action, t0=None, fps=scene.render.fps / scene.render.fps_base,
+                                  start=scene.frame_start, frame=None, count=0, shape_keys=self.driven_shape_keys())
+            scene.frame_current = scene.frame_start
+            print('RGB MoCap Live: recording into', action.name)
+        elif value['cmd'] == 'live_record_stop' and self.live_keys is not None:
+            state, self.live_keys = self.live_keys, None
+            print(f"RGB MoCap Live: recorded {state['count']} frames into {state['action'].name}")
+        elif value['cmd'] == 'bake_take':
             # Bake a recorded (optionally trimmed) take saved by the app: JSON lines of packets.
             rows = [json.loads(line) for line in open(value['path'], encoding='utf-8')]
             first, last = value.get('in', 0), value.get('out', len(rows) - 1)
@@ -265,6 +310,8 @@ class Receiver:
             self.avatar.apply(packet); self.last = packet; self.frames += 1
             if self.recording is not None:
                 self.recording.append(packet)
+            if self.live_keys is not None:
+                self.key_live(packet)
         return 1 / 60
 
     def bake(self, fps=30):

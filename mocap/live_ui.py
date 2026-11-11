@@ -142,7 +142,10 @@ class LivePanel(QWidget):
         self.blender_button.setToolTip('Open a VRM avatar (default: Seed-san) in Blender with the live receiver')
         self.blender_button.clicked.connect(self.open_blender)
         self.send_blender = QCheckBox('Send to Blender'); self.send_blender.setChecked(True)
-        for w in (self.camera, self.start_button, self.pause_button, self.record_button, self.send_blender, self.blender_button):
+        self.key_blender = QCheckBox('Key in Blender while recording'); self.key_blender.setChecked(True)
+        self.key_blender.setToolTip('Record straight into a new Blender Action as you perform (Blender must be open)')
+        for w in (self.camera, self.start_button, self.pause_button, self.record_button, self.send_blender,
+                  self.key_blender, self.blender_button):
             row.addWidget(w)
         row.addStretch(1)
         self.status = QLabel('Choose a camera and press Start Camera.'); self.status.setObjectName('muted')
@@ -184,6 +187,17 @@ class LivePanel(QWidget):
         row.addStretch(1)
         for w in (self.bake_button, self.delete_button, self.folder_button):
             row.addWidget(w)
+        row = QHBoxLayout(); col.addLayout(row)
+        row.addWidget(QLabel('Export MP4'))
+        self.export_buttons = []
+        for kind, label, tip in (('webcam', 'Webcam', 'The recorded camera footage'),
+                                 ('avatar', 'Avatar', 'The avatar performing the take, rendered by a background Blender'),
+                                 ('side', 'Side by Side', 'Camera and avatar next to each other')):
+            b = QPushButton(label); b.setToolTip(tip + ' (uses the In/Out trim)')
+            b.clicked.connect(lambda _=False, k=kind: self.export(k)); row.addWidget(b); self.export_buttons.append(b)
+        self.quality = QCheckBox('High quality avatar (EEVEE)')
+        row.addWidget(self.quality); row.addStretch(1)
+        self.export_process = None
 
         self.timer = QTimer(self); self.timer.setTimerType(Qt.PreciseTimer)
         self.timer.timeout.connect(self.tick); self.timer.start(16)
@@ -261,6 +275,51 @@ class LivePanel(QWidget):
         if self.send_blender.isChecked():
             self.out.writeDatagram(payload, QHostAddress.LocalHost, BLENDER_PORT)
 
+    def control(self, command):
+        self.out.writeDatagram(json.dumps(command).encode(), QHostAddress.LocalHost, BLENDER_PORT)
+
+    # ---- export --------------------------------------------------------------------------
+    def export(self, kind):
+        if not self.take or self.export_process is not None:
+            return
+        movies = Path.home() / 'Movies'
+        default = movies / f'{self.take.folder.name}_{kind}.mp4'
+        path, _ = QFileDialog.getSaveFileName(self, 'Export MP4', str(default), 'MP4 video (*.mp4)')
+        if not path:
+            return
+        first, last = self.trim_range()
+        args = [str(ROOT / 'live/export_take.py'), str(self.take.folder), '--kind', kind, '--out', path,
+                '--first', str(first), '--last', str(last)]
+        if getattr(self, 'avatar_vrm', None):
+            args += ['--avatar', str(self.avatar_vrm)]
+        if self.quality.isChecked():
+            args.append('--quality')
+        self.export_process = QProcess(self); self.export_path = path
+        self.export_process.setWorkingDirectory(str(ROOT))
+        self.export_process.setProcessChannelMode(QProcess.MergedChannels)
+        self.export_process.readyReadStandardOutput.connect(self.read_export)
+        self.export_process.finished.connect(self.export_finished)
+        self.export_process.start(sys.executable, ['-u', *args])
+        self.status.setText(f'Exporting {kind} video…'); self.update_buttons()
+
+    def read_export(self):
+        for line in bytes(self.export_process.readAllStandardOutput()).decode(errors='replace').splitlines():
+            if line.startswith('PROGRESS '):
+                _, value, message = line.split(' ', 2)
+                self.status.setText(f'Export {value}% · {message}')
+            elif 'Error' in line or 'Traceback' in line:
+                self.status.setText(line.strip()[:200])
+
+    def export_finished(self, code, _status):
+        path = self.export_path; self.export_process = None
+        if code == 0 and Path(path).exists():
+            self.status.setText(f'Exported {path}')
+            if sys.platform == 'darwin':
+                subprocess.Popen(['open', '-R', path])
+        else:
+            self.status.setText(f'Export failed (exit {code}).')
+        self.update_buttons()
+
     def show_jpeg(self, jpeg):
         image = QImage.fromData(jpeg, 'JPG')
         if image.isNull():
@@ -276,8 +335,12 @@ class LivePanel(QWidget):
                 self.status.setText('Start the camera first.'); return
             self.recorder = Recorder()
             self.record_button.setText('■ Stop Recording')
+            if self.key_blender.isChecked() and self.send_blender.isChecked():
+                self.control({'cmd': 'live_record_start'})
         elif self.recorder is not None:
             folder = self.recorder.finish(); self.recorder = None
+            if self.key_blender.isChecked() and self.send_blender.isChecked():
+                self.control({'cmd': 'live_record_stop'})
             self.record_button.setText('● Record')
             self.refresh_takes(select=folder.name)
         self.update_buttons()
@@ -426,7 +489,7 @@ class LivePanel(QWidget):
         vrm, _ = QFileDialog.getOpenFileName(self, 'Avatar (VRM 1.0)', str(default), 'VRM avatars (*.vrm)')
         if not vrm:
             return
-        vrm = Path(vrm); blend = ROOT / 'build/avatars' / (vrm.stem + '.blend')
+        vrm = Path(vrm); self.avatar_vrm = vrm; blend = ROOT / 'build/avatars' / (vrm.stem + '.blend')
         blend.parent.mkdir(parents=True, exist_ok=True)
         if not blend.exists() or vrm.stat().st_mtime > blend.stat().st_mtime:
             self.status.setText('Preparing avatar for Blender…')
@@ -448,6 +511,8 @@ class LivePanel(QWidget):
         for w in (self.play_button, self.stop_button, self.slider, self.in_button, self.out_button,
                   self.clear_button, self.bake_button, self.delete_button):
             w.setEnabled(has_take and not self.record_button.isChecked())
+        for w in getattr(self, 'export_buttons', []):
+            w.setEnabled(has_take and not self.record_button.isChecked() and self.export_process is None)
 
     def shutdown(self):
         self.stop_capture()
