@@ -216,6 +216,9 @@ def main():
     ap.add_argument('--track', choices=('full', 'upper', 'head'), default='full',
                     help='body parts that drive the avatar (upper: legs still; head: head and face only)')
     ap.add_argument('--no-overlay', action='store_true', help='app mode: send the plain camera image')
+    ap.add_argument('--unmirror', action='store_true',
+                    help='flip camera frames before tracking (for cameras that deliver selfie-mirrored images, '
+                         'so the performer\'s right hand drives the avatar\'s right hand)')
     ap.add_argument('--frames', type=int, default=0, help='stop after N frames (testing)')
     ap.add_argument('--snapshots', type=Path, help='save an annotated camera frame here every second (diagnostics)')
     ap.add_argument('--crop', help='x,y,w,h region of the frame to track (e.g. a screen recording)')
@@ -247,6 +250,8 @@ def main():
                 ok, frame = cap.read()
             if not ok:
                 break
+            if args.unmirror:
+                frame = cv2.flip(frame, 1)
             if args.crop:
                 x, y, w, h = map(int, args.crop.split(','))
                 frame = np.ascontiguousarray(frame[y:y + h, x:x + w])

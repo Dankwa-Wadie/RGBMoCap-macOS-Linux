@@ -17,4 +17,4 @@ if [ ! -f "$BLEND" ] || [ "$VRM" -nt "$BLEND" ]; then
 fi
 "$BLENDER" "$BLEND" --python live/blender/start_live.py >/dev/null 2>&1 &
 sleep 6
-exec .venv-live/bin/python live/capture.py --camera "$CAMERA" ${RGBMOCAP_LIVE_DIAG:+--snapshots "$RGBMOCAP_LIVE_DIAG"}
+exec .venv-live/bin/python live/capture.py --camera "$CAMERA" --unmirror ${RGBMOCAP_LIVE_DIAG:+--snapshots "$RGBMOCAP_LIVE_DIAG"}

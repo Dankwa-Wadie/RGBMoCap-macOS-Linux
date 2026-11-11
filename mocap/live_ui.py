@@ -153,7 +153,11 @@ class LivePanel(QWidget):
         self.blender_button.clicked.connect(self.open_blender)
         self.send_blender = QCheckBox('Send to Blender'); self.send_blender.setChecked(True)
         self.key_blender = QCheckBox('Key in Blender while recording'); self.key_blender.setChecked(True)
-        self.mirror = QCheckBox('Mirror view'); self.mirror.setChecked(True)
+        self.unmirror = QCheckBox('Un-mirror camera'); self.unmirror.setChecked(True)
+        self.unmirror.setToolTip('Flip the camera image before tracking. Keep on if the camera delivers a selfie '
+                                 '(mirrored) image: then your right hand moves the avatar\'s right hand. '
+                                 'Takes effect when the camera starts.')
+        self.mirror = QCheckBox('Mirror view'); self.mirror.setChecked(False)
         self.mirror.setToolTip('Show the camera like a mirror (display only; tracking and Blender are unaffected)')
         self.mirror.toggled.connect(lambda _: self.last_jpeg and self.show_jpeg(self.last_jpeg))
         self.mirror.toggled.connect(lambda _: self.sync_backdrop(force=True))
@@ -162,7 +166,7 @@ class LivePanel(QWidget):
         self.backdrop = QCheckBox('Webcam background in Blender')
         self.backdrop.setToolTip('Show the live camera image on a backdrop behind the avatar in Blender')
         self.key_blender.setToolTip('Record straight into a new Blender Action as you perform (Blender must be open)')
-        for w in (self.camera, self.track, self.mirror, self.start_button, self.pause_button, self.record_button, self.send_blender,
+        for w in (self.camera, self.track, self.unmirror, self.mirror, self.start_button, self.pause_button, self.record_button, self.send_blender,
                   self.key_blender, self.backdrop, self.blender_button):
             row.addWidget(w)
         row.addStretch(1)
@@ -241,7 +245,8 @@ class LivePanel(QWidget):
         self.process.readyReadStandardOutput.connect(self.read_process)
         self.process.finished.connect(self.capture_finished)
         self.process.start(str(python), ['-u', str(ROOT / 'live/capture.py'), '--camera', str(self.camera.currentData()),
-                                         '--app', '--port', str(APP_PORT), '--no-preview'])
+                                         '--app', '--port', str(APP_PORT), '--no-preview',
+                                         *(['--unmirror'] if self.unmirror.isChecked() else [])])
         self.status.setText('Starting camera and tracking models… (macOS may ask for camera access)')
         self.update_buttons()
 
@@ -537,7 +542,7 @@ class LivePanel(QWidget):
         live = self.process is not None
         has_take = self.take is not None and bool(self.take.packets)
         self.start_button.setText('Stop Camera' if live else 'Start Camera')
-        self.camera.setEnabled(not live)
+        self.camera.setEnabled(not live); self.unmirror.setEnabled(not live)
         self.pause_button.setEnabled(live); self.record_button.setEnabled(live)
         for w in (self.play_button, self.stop_button, self.slider, self.in_button, self.out_button,
                   self.clear_button, self.bake_button, self.delete_button):
