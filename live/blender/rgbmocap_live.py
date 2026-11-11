@@ -233,6 +233,7 @@ class Receiver:
     def __init__(self):
         self.sock = None; self.avatar = None; self.recording = None; self.last = None; self.frames = 0
         self.live_keys = None  # while recording live: {'action', 't0', 'fps', 'start', 'frame', 'count'}
+        self.backdrop_jpeg = None; self.backdrop_at = 0.0
 
     def start(self, arm, port=PORT):
         self.avatar = Avatar(arm)
@@ -253,12 +254,50 @@ class Receiver:
                 data, _ = self.sock.recvfrom(1 << 20)
             except (BlockingIOError, OSError):
                 break
+            if data[:2] == b'\xff\xd8':  # a JPEG camera frame for the backdrop
+                self.backdrop_jpeg = data
+                continue
             value = json.loads(data)
             if 'cmd' in value:
                 self.command(value)
             else:
                 packet = value
         return packet
+
+    def update_backdrop(self):
+        """Show the newest camera frame on a plane behind the avatar (~15 updates/s)."""
+        import os, tempfile, time
+        now = time.monotonic()
+        if now - self.backdrop_at < 1 / 15:
+            return
+        self.backdrop_at = now
+        path = os.path.join(tempfile.gettempdir(), 'rgbmocap_backdrop.jpg')
+        with open(path, 'wb') as f:
+            f.write(self.backdrop_jpeg)
+        self.backdrop_jpeg = None
+        image = bpy.data.images.get('RGBMoCap_Webcam')
+        if image is None:
+            image = bpy.data.images.load(path); image.name = 'RGBMoCap_Webcam'
+            self.make_backdrop(image)
+        else:
+            image.reload()
+
+    def make_backdrop(self, image):
+        arm = self.avatar.arm if self.avatar else None
+        height = 2.2; width = height * image.size[0] / max(1, image.size[1])
+        mesh = bpy.data.meshes.new('RGBMoCap_Backdrop')
+        mesh.from_pydata([(-width / 2, 0, 0), (width / 2, 0, 0), (width / 2, 0, height), (-width / 2, 0, height)], [], [(0, 1, 2, 3)])
+        mesh.uv_layers.new().data.foreach_set('uv', [0, 0, 1, 0, 1, 1, 0, 1])
+        plane = bpy.data.objects.new('RGBMoCap_Backdrop', mesh)
+        plane.location = (arm.location.x if arm else 0, (arm.location.y if arm else 0) + 1.6, 0)
+        material = bpy.data.materials.new('RGBMoCap_Webcam'); material.use_nodes = True
+        nodes, links = material.node_tree.nodes, material.node_tree.links
+        nodes.clear()
+        tex = nodes.new('ShaderNodeTexImage'); tex.image = image
+        emit = nodes.new('ShaderNodeEmission'); out = nodes.new('ShaderNodeOutputMaterial')
+        links.new(tex.outputs[0], emit.inputs[0]); links.new(emit.outputs[0], out.inputs[0])
+        mesh.materials.append(material)
+        bpy.context.scene.collection.objects.link(plane)
 
     def driven_shape_keys(self):
         keys = set()
@@ -318,6 +357,8 @@ class Receiver:
         if self.sock is None:
             return None
         packet = self.poll()
+        if self.backdrop_jpeg is not None:
+            self.update_backdrop()
         if packet:
             self.avatar.apply(packet); self.last = packet; self.frames += 1
             if self.recording is not None:

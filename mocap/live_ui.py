@@ -125,6 +125,8 @@ class LivePanel(QWidget):
         self.socket.setSocketOption(QUdpSocket.ReceiveBufferSizeSocketOption, 4 << 20)
         self.socket.readyRead.connect(self.read_datagrams)
         self.out = QUdpSocket(self)
+        self.out.bind(QHostAddress.LocalHost, 0)
+        self.out.setSocketOption(QUdpSocket.SendBufferSizeSocketOption, 1 << 20)  # macOS: datagram limit
 
         col = QVBoxLayout(self); col.setContentsMargins(6, 6, 6, 6)
         # live row
@@ -151,9 +153,11 @@ class LivePanel(QWidget):
         self.blender_button.clicked.connect(self.open_blender)
         self.send_blender = QCheckBox('Send to Blender'); self.send_blender.setChecked(True)
         self.key_blender = QCheckBox('Key in Blender while recording'); self.key_blender.setChecked(True)
+        self.backdrop = QCheckBox('Webcam background in Blender')
+        self.backdrop.setToolTip('Show the live camera image on a backdrop behind the avatar in Blender')
         self.key_blender.setToolTip('Record straight into a new Blender Action as you perform (Blender must be open)')
         for w in (self.camera, self.track, self.start_button, self.pause_button, self.record_button, self.send_blender,
-                  self.key_blender, self.blender_button):
+                  self.key_blender, self.backdrop, self.blender_button):
             row.addWidget(w)
         row.addStretch(1)
         self.status = QLabel('Choose a camera and press Start Camera.'); self.status.setObjectName('muted')
@@ -276,6 +280,8 @@ class LivePanel(QWidget):
                     self.send(json.dumps(self.packet, separators=(',', ':')).encode())
             elif data[:1] == b'F' and not self.playing:
                 self.show_jpeg(data[1:])
+                if self.backdrop.isChecked() and self.send_blender.isChecked():
+                    self.out.writeDatagram(data[1:], QHostAddress.LocalHost, BLENDER_PORT)
                 if self.recorder is not None and self.packet is not None and not self.paused:
                     self.recorder.add(self.packet, data[1:])
 
