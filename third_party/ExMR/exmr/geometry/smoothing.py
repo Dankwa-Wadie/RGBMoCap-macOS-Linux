@@ -36,12 +36,16 @@ def gaussian_smooth_rotations(aa, sigma, dim=-2):
     """
     mats = axis_angle_to_matrix(aa.unflatten(-1, (-1, 3)))  # (..., J, 3, 3)
     mats = gaussian_smooth(mats.flatten(-3), sigma, dim).unflatten(-1, mats.shape[-3:])
+    # MPS (Apple GPU) has no float64: project onto SO(3) on the CPU, still in float64.
+    device = mats.device
+    if device.type == 'mps':
+        mats = mats.cpu()
     u, _, vh = torch.linalg.svd(mats.double())
     # the nearest rotation, not reflection: flip the least significant direction if det = -1
     flip = torch.ones_like(u[..., 0, :])
     flip[..., -1] = torch.linalg.det(u @ vh).sign()
     rot = (u * flip.unsqueeze(-2)) @ vh
-    return matrix_to_axis_angle(rot.to(aa.dtype)).flatten(-2)
+    return matrix_to_axis_angle(rot.to(aa.dtype).to(device)).flatten(-2)
 
 
 def _smooth(x, kernel, dim):

@@ -79,7 +79,15 @@ def install():
                 kwargs['device'] = _map(kwargs['device'])
             if func in _TO_LIKE and len(args) > 1:
                 args = (args[0], _map(args[1]), *args[2:])
-            return func(*args, **kwargs)
+            try:
+                return func(*args, **kwargs)
+            except TypeError as error:
+                # MPS casts before copying, so tensor.to('cpu', torch.float64) fails where
+                # CUDA succeeds. Copy to the CPU first, then cast (same result).
+                if (func in _TO_LIKE and 'float64' in str(error) and args
+                        and isinstance(args[0], torch.Tensor) and args[0].device.type == 'mps'):
+                    return func(args[0].cpu(), *args[1:], **kwargs)
+                raise
 
     _TO_LIKE = {torch.Tensor.to}
 
@@ -198,7 +206,9 @@ def install():
         _PEAK[0] = mps.driver_allocated_memory() if on_mps else 0
 
     def seed(value):
-        torch.manual_seed(value)
+        # torch.manual_seed itself calls torch.cuda.manual_seed_all: seed MPS directly.
+        if on_mps:
+            mps.manual_seed(int(value))
 
     replacements = dict(
         is_available=lambda: True, is_initialized=lambda: True, init=lambda: None,
@@ -210,6 +220,7 @@ def install():
         max_memory_reserved=peak, reset_peak_memory_stats=reset_peak, reset_max_memory_allocated=reset_peak,
         reset_accumulated_memory_stats=lambda device=None: None, ipc_collect=lambda: None,
         set_per_process_memory_fraction=lambda fraction, device=None: None,
+        get_per_process_memory_fraction=lambda device=None: 1.0,
         manual_seed=seed, manual_seed_all=seed, is_bf16_supported=lambda *a, **k: on_mps,
         Event=Event, Stream=Stream, current_stream=lambda device=None: Stream(),
         default_stream=lambda device=None: Stream(), stream=lambda s=None: contextlib.nullcontext(),

@@ -212,7 +212,7 @@ class VideoProcessor:
             if duration is not None:
                 cmd += ["-t", str(duration)]
             if force_fps and encoder_name:
-                cmd += ["-vf", f"fps={int(force_fps)}", "-c:v", encoder_name, "-vsync", "1", "-pix_fmt", "yuv420p"]
+                cmd += ["-vf", f"fps={int(force_fps)}", "-c:v", encoder_name, "-fps_mode", "cfr", "-pix_fmt", "yuv420p"]
                 if "libx264" in encoder_name or "libx265" in encoder_name:
                     cmd += ["-preset", "fast", "-crf", "22"]
                 elif "nvenc" in encoder_name:

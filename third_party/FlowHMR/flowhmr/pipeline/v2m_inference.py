@@ -708,7 +708,7 @@ class V2MInferenceEngine:
                 "-i", video_path,
                 "-ss", str(start_time),
                 "-t", str(duration),
-                "-c:v", encoder_name, "-vsync", "1", "-pix_fmt", "yuv420p", "-an",
+                "-c:v", encoder_name, "-fps_mode", "cfr", "-pix_fmt", "yuv420p", "-an",
             ]
             if "libx264" in encoder_name or "libx265" in encoder_name:
                 cmd += ["-preset", "fast", "-crf", "22"]

@@ -218,8 +218,10 @@ def _decode_udp(encoded, codec):
     dxx, dyy = ix1 - 2 * i_ + ix1_, iy1 - 2 * i_ + iy1_
     dxy = 0.5 * (ix1y1 - ix1 - iy1 + i_ + i_ - ix1_ - iy1_ + ix1_y1_)
     hessian = torch.stack((dxx, dxy, dxy, dyy), dim=-1).reshape(batch, channels, 2, 2)
-    eye = torch.eye(2, device=encoded.device, dtype=torch.float64)
-    inverse = torch.linalg.inv(hessian.to(torch.float64) + np.finfo(np.float32).eps * eye)
-    correction = (inverse @ derivative.to(torch.float64)).squeeze(-1).to(torch.float32)
+    # MPS (Apple GPU) has no float64: solve the small 2x2 systems on the CPU, still in float64.
+    solve_device = 'cpu' if encoded.device.type == 'mps' else encoded.device
+    eye = torch.eye(2, device=solve_device, dtype=torch.float64)
+    inverse = torch.linalg.inv(hessian.to(solve_device, torch.float64) + np.finfo(np.float32).eps * eye)
+    correction = (inverse @ derivative.to(solve_device, torch.float64)).squeeze(-1).to(keypoints.device, torch.float32)
     keypoints.sub_(correction)
     return keypoints.cpu().numpy(), scores.cpu().numpy()

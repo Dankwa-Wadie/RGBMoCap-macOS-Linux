@@ -162,7 +162,7 @@ def frame_dir(project,n):
         if json.loads((directory/'receipt.json').read_text(encoding='utf-8'))==identity and len(list(directory.glob('*.jpg')))==n:return directory
     except (OSError,ValueError):pass
     for path in directory.glob('*.jpg'):path.unlink()
-    subprocess.run([executable('ffmpeg'),'-v','error','-i',str(project/'input.mp4'),'-vsync','0','-q:v','2','-start_number','0','-threads','2','-y',str(directory/'%06d.jpg')],check=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    subprocess.run([executable('ffmpeg'),'-v','error','-i',str(project/'input.mp4'),'-fps_mode','passthrough','-q:v','2','-start_number','0','-threads','2','-y',str(directory/'%06d.jpg')],check=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
     if len(list(directory.glob('*.jpg')))!=n:raise ValueError('ExMR frame count differs from project')
     atomic_json(directory/'receipt.json',identity)
     return directory

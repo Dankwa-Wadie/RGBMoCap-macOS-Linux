@@ -38,3 +38,19 @@ def test_autocast_and_load(tmp_path):
     assert torch.load(tmp_path / 'c.pt', map_location='cuda')['w'].device.type == 'mps'
     assert torch.load(tmp_path / 'c.pt')['w'].device.type == 'cpu'
     assert torch.OutOfMemoryError is torch.cuda.OutOfMemoryError
+
+
+def test_seeding_is_reproducible():
+    torch.manual_seed(0); torch.cuda.manual_seed(0); torch.cuda.manual_seed_all(0)
+    a = torch.randn(4, device='cuda')
+    torch.manual_seed(0)
+    b = torch.randn(4, device='cuda')
+    assert torch.equal(a.cpu(), b.cpu())
+
+
+def test_float64_copy_to_cpu():
+    x = torch.ones(2, 2, device='cuda')
+    y = x.to('cpu', torch.float64)
+    assert y.device.type == 'cpu' and y.dtype == torch.float64
+    z = x.to(device='cpu', dtype=torch.float64)
+    assert z.device.type == 'cpu' and z.dtype == torch.float64
