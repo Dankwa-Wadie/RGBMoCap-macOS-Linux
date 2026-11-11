@@ -204,8 +204,7 @@ class LivePanel(QWidget):
         self.export_buttons = []
         for kind, label, tip in (('webcam', 'Webcam', 'The recorded camera footage'),
                                  ('avatar', 'Avatar', 'The avatar performing the take, rendered by a background Blender'),
-                                 ('side', 'Side by Side', 'Camera and avatar next to each other'),
-                                 ('room', 'In My Room', 'The avatar composited into your Gaussian-splat room scan')):
+                                 ('side', 'Side by Side', 'Camera and avatar next to each other')):
             b = QPushButton(label); b.setToolTip(tip + ' (uses the In/Out trim)')
             b.clicked.connect(lambda _=False, k=kind: self.export(k)); row.addWidget(b); self.export_buttons.append(b)
         self.quality = QCheckBox('High quality avatar (EEVEE)')
