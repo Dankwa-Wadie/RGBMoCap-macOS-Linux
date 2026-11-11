@@ -153,10 +153,14 @@ class LivePanel(QWidget):
         self.blender_button.clicked.connect(self.open_blender)
         self.send_blender = QCheckBox('Send to Blender'); self.send_blender.setChecked(True)
         self.key_blender = QCheckBox('Key in Blender while recording'); self.key_blender.setChecked(True)
+        self.mirror = QCheckBox('Mirror view'); self.mirror.setChecked(True)
+        self.mirror.setToolTip('Show the camera like a mirror (display only; tracking and Blender are unaffected)')
+        self.mirror.toggled.connect(lambda _: self.last_jpeg and self.show_jpeg(self.last_jpeg))
+        self.last_jpeg = None
         self.backdrop = QCheckBox('Webcam background in Blender')
         self.backdrop.setToolTip('Show the live camera image on a backdrop behind the avatar in Blender')
         self.key_blender.setToolTip('Record straight into a new Blender Action as you perform (Blender must be open)')
-        for w in (self.camera, self.track, self.start_button, self.pause_button, self.record_button, self.send_blender,
+        for w in (self.camera, self.track, self.mirror, self.start_button, self.pause_button, self.record_button, self.send_blender,
                   self.key_blender, self.backdrop, self.blender_button):
             row.addWidget(w)
         row.addStretch(1)
@@ -338,6 +342,9 @@ class LivePanel(QWidget):
         image = QImage.fromData(jpeg, 'JPG')
         if image.isNull():
             return
+        self.last_jpeg = jpeg
+        if self.mirror.isChecked():
+            image = image.mirrored(True, False)   # horizontal flip, display only
         pixmap = QPixmap.fromImage(image).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.preview.setPixmap(pixmap)
 

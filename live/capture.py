@@ -259,7 +259,7 @@ def main():
             data = json.dumps(packet, separators=(',', ':')).encode()
             if args.app:
                 sock.sendto(b'P' + data, (args.host, args.port))
-                shown = draw(frame.copy(), results, fps, f'{fps:4.1f} fps') if not args.no_overlay else frame
+                shown = draw(frame.copy(), results, fps, ' ') if not args.no_overlay else frame  # no text: the app may mirror
                 for width, quality in ((960, 75), (640, 70)):  # largest that fits one datagram
                     small = cv2.resize(shown, (width, int(frame.shape[0] * width / frame.shape[1])))
                     ok_jpg, jpg = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, quality])
