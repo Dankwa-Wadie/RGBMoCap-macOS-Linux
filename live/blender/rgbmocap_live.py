@@ -98,6 +98,8 @@ class Avatar:
             if has(*names):
                 hand, middle, index, little = (rest(n) for n in names)
                 self.rest_frames[side + 'Hand'] = self.hand_frame(middle - hand, index - little)
+        self.last_basis = {}   # bone name -> last tracked basis rotation
+        self.weight = {}       # bone name -> 0..1 tracking weight (eases in/out)
         self.shape_targets = [o for o in bpy.data.objects if o.type == 'MESH' and o.data.shape_keys
                               and any(m.type == 'ARMATURE' and m.object == arm for m in o.modifiers)]
 
@@ -113,13 +115,26 @@ class Avatar:
         pose = packet.get('pose')
         if pose:
             P = [self.to_local @ Vector(p) for p in pose]
-            mid_hip = (P[L_HIP] + P[R_HIP]) / 2; mid_sh = (P[L_SH] + P[R_SH]) / 2
-            targets['hips'] = ('frame', frame_from(P[L_HIP] - P[R_HIP], mid_sh - mid_hip))
-            targets['chest'] = ('frame', frame_from(P[L_SH] - P[R_SH], mid_sh - mid_hip))
+            valid = packet.get('pose_valid') or [True] * len(P)
+            ok = lambda *ids: all(valid[i] for i in ids)
+            mid_sh = (P[L_SH] + P[R_SH]) / 2
+            up = self.to_local @ Vector((0, 0, 1))
+            if ok(L_SH, R_SH):
+                if ok(L_HIP, R_HIP):
+                    mid_hip = (P[L_HIP] + P[R_HIP]) / 2
+                    targets['hips'] = ('frame', frame_from(P[L_HIP] - P[R_HIP], mid_sh - mid_hip))
+                    targets['chest'] = ('frame', frame_from(P[L_SH] - P[R_SH], mid_sh - mid_hip))
+                else:
+                    # Hips out of view: keep the pelvis upright, turned with the shoulders.
+                    side = P[L_SH] - P[R_SH]; side = side - side.project(up)
+                    targets['hips'] = ('frame', frame_from(side, up))
+                    targets['chest'] = ('frame', frame_from(P[L_SH] - P[R_SH], up))
             for h, (a, b) in LIMBS.items():
-                targets[h] = ('dir', P[b] - P[a])
-            ear_x = P[L_EAR] - P[R_EAR]; forward = P[NOSE] - (P[L_EAR] + P[R_EAR]) / 2
-            targets['head'] = ('frame', frame_from(ear_x, forward.cross(ear_x)))
+                if ok(a, b):
+                    targets[h] = ('dir', P[b] - P[a])
+            if ok(NOSE, L_EAR, R_EAR) or ok(NOSE, L_SH, R_SH):
+                ear_x = P[L_EAR] - P[R_EAR]; forward = P[NOSE] - (P[L_EAR] + P[R_EAR]) / 2
+                targets['head'] = ('frame', frame_from(ear_x, forward.cross(ear_x)))
         for side, points in (packet.get('hands') or {}).items():
             H = [self.to_local @ Vector(p) for p in points]
             targets[side + 'Hand'] = ('frame', self.hand_frame(H[9] - H[0], H[5] - H[17]))
@@ -167,10 +182,18 @@ class Avatar:
                     if rotation is not None:
                         absolute[human] = rotation
                         matrix = Matrix.Translation(inherited.to_translation()) @ (rotation.to_matrix() @ rest.to_3x3()).to_4x4()
+            tracked = matrix is not inherited
+            if tracked:
+                self.last_basis[pb.name] = (inherited.inverted() @ matrix).to_quaternion()
+            # Ease tracked bones in, and untracked ones (out of frame) back to their rest pose.
+            w = self.weight.get(pb.name, 0.0)
+            w = min(1.0, w + 0.25) if tracked else max(0.0, w - 0.08)
+            self.weight[pb.name] = w
+            basis = Quaternion().slerp(self.last_basis.get(pb.name, Quaternion()), w)
+            matrix = inherited @ basis.to_matrix().to_4x4()
             posed[pb.name] = matrix
-            basis = inherited.inverted() @ matrix
             pb.rotation_mode = 'QUATERNION'
-            pb.rotation_quaternion = basis.to_quaternion()
+            pb.rotation_quaternion = basis
 
     def apply_face(self, face):
         weights = {}

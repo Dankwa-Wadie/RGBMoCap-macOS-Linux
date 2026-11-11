@@ -109,6 +109,11 @@ class Tracker:
             pose_image = np.array([[l.x, l.y] for l in pose.pose_landmarks[0]])
             packet['pose'] = np.round(self.filt('pose', to_blender(world), t), 4).tolist()
             packet['pose_visibility'] = np.round(vis, 3).tolist()
+            # A landmark drives the avatar only when MediaPipe is confident and it is inside the
+            # picture; off-frame legs are otherwise hallucinated and jitter.
+            image_lms = pose.pose_landmarks[0]
+            packet['pose_valid'] = [bool(l.visibility > 0.6 and 0.01 < l.x < 0.99 and 0.01 < l.y < 0.99)
+                                    for l in image_lms]
         hands = self.hands.detect_for_video(image, t_ms)
         if hands.hand_world_landmarks:
             packet['hands'] = {}
