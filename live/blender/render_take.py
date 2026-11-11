@@ -15,6 +15,7 @@ from mathutils import Vector
 args = sys.argv[sys.argv.index('--') + 1:]
 take, first, last, fps, out_dir, width, height, engine = (
     Path(args[0]), int(args[1]), int(args[2]), float(args[3]), Path(args[4]), int(args[5]), int(args[6]), args[7])
+view = json.loads(Path(args[8]).read_text()) if len(args) > 8 else None   # room view (live/splat/render_room.py)
 here = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('rgbmocap_live', here / 'rgbmocap_live.py')
 live = importlib.util.module_from_spec(spec); spec.loader.exec_module(live)
@@ -58,6 +59,20 @@ cam.data.lens = 50; scene.camera = cam
 distance = height_m * 1.15 * cam.data.lens / cam.data.sensor_width * max(1.0, height / width) + 0.5
 cam.location = (center.x, low.y - distance, center.z)
 cam.rotation_euler = (1.5708, 0, 0)
+
+if view is not None:
+    # Match the splat camera exactly and stand the avatar on the room floor, facing it.
+    from mathutils import Matrix
+    cam.matrix_world = Matrix(view['matrix_world'])
+    cam.data.sensor_fit = 'HORIZONTAL'; cam.data.sensor_width = view['sensor_width']; cam.data.lens = view['lens']
+    cam.data.shift_x, cam.data.shift_y = view['shift_x'], view['shift_y']
+    scene.render.resolution_x, scene.render.resolution_y = view['width'], view['height']
+    scene.render.film_transparent = True
+    scene.render.image_settings.color_mode = 'RGBA'
+    arm.location = view['avatar_location']; arm.rotation_mode = 'XYZ'; arm.rotation_euler = (0, 0, view['avatar_yaw'])
+    for obj in list(scene.objects):
+        if obj.name.startswith(('RoomSplat', 'RGBMoCap_Backdrop')):
+            obj.hide_render = True
 
 # Warm up easing on the first pose, then render one frame per output time step.
 for _ in range(12):

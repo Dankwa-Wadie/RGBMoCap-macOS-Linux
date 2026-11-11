@@ -117,3 +117,5 @@ third_party/**/.git/
 build/
 third_party/KimodoMotionCorrection/bin/*.so
 .DS_Store
+.venv-live/
+.venv-splat/

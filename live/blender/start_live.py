@@ -30,8 +30,12 @@ def begin():
                 o.select_set(o == arm or o.parent == arm)
             bpy.context.view_layer.objects.active = arm
             with bpy.context.temp_override(area=area, region=region):
-                bpy.ops.view3d.view_axis(type='FRONT')
-                bpy.ops.view3d.view_selected()
+                if 'RoomView' in bpy.data.objects:      # room scan: look through the room camera
+                    bpy.context.scene.camera = bpy.data.objects['RoomView']
+                    area.spaces.active.region_3d.view_perspective = 'CAMERA'
+                else:
+                    bpy.ops.view3d.view_axis(type='FRONT')
+                    bpy.ops.view3d.view_selected()
             for o in bpy.context.view_layer.objects:
                 o.select_set(False)
     print('RGB MoCap Live: listening on udp://127.0.0.1:%d for %s' % (live.PORT, arm.name))

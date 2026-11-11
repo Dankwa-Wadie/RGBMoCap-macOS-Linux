@@ -68,7 +68,9 @@ class Encoder:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('take', type=Path)
-    ap.add_argument('--kind', choices=('webcam', 'avatar', 'side'), required=True)
+    ap.add_argument('--kind', choices=('webcam', 'avatar', 'side', 'room'), required=True)
+    ap.add_argument('--room', type=Path, default=ROOT / 'build/splat',
+                    help='room folder with background.png and view.json (live/splat/render_room.py)')
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--fps', type=float, default=30.0)
     ap.add_argument('--first', type=int); ap.add_argument('--last', type=int)
@@ -94,7 +96,7 @@ def main():
     work = Path(tempfile.mkdtemp(prefix='rgbmocap-export-'))
     try:
         avatar_dir = None
-        if args.kind in ('avatar', 'side'):
+        if args.kind in ('avatar', 'side', 'room'):
             blender = blender_path()
             if not blender:
                 sys.exit('Blender was not found; set RGBMOCAP_BLENDER')
@@ -106,6 +108,10 @@ def main():
             cmd = [blender, '-b', str(blend), '--python-exit-code', '1', '--python', str(ROOT / 'live/blender/render_take.py'),
                    '--', str(args.take / 'take.jsonl'), str(first), str(last), str(args.fps), str(avatar_dir), str(aw), str(ah),
                    'quality' if args.quality else 'fast']
+            if args.kind == 'room':
+                if not (args.room / 'view.json').exists():
+                    sys.exit('No room view yet: train a room splat and run live/splat/render_room.py')
+                cmd.append(str(args.room / 'view.json'))
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             for line in proc.stdout:
                 if line.startswith('RENDER ') and '/' in line:
@@ -115,8 +121,10 @@ def main():
                 raise RuntimeError('Blender could not render the avatar')
         if args.kind == 'webcam':
             size = (cam_w, cam_h)
-        elif args.kind == 'avatar':
+        elif args.kind in ('avatar', 'room'):
             size = cv2.imread(str(avatar_dir / '00000.png')).shape[1::-1]
+            if args.kind == 'room':
+                background = cv2.resize(cv2.imread(str(args.room / 'background.png')), size).astype(np.float32)
         else:
             av = cv2.imread(str(avatar_dir / '00000.png'))
             size = (cam_w + av.shape[1], cam_h)
@@ -127,8 +135,12 @@ def main():
             if args.kind == 'webcam':
                 frame = webcam(k)
             else:
-                avatar = cv2.imread(str(avatar_dir / f'{k:05d}.png'))
-                frame = avatar if args.kind == 'avatar' else np.hstack([webcam(k), avatar])
+                avatar = cv2.imread(str(avatar_dir / f'{k:05d}.png'), cv2.IMREAD_UNCHANGED if args.kind == 'room' else cv2.IMREAD_COLOR)
+                if args.kind == 'room':   # avatar (premultiplied-free RGBA) over the photoreal room
+                    alpha = avatar[..., 3:4].astype(np.float32) / 255
+                    frame = (avatar[..., :3] * alpha + background * (1 - alpha)).astype(np.uint8)
+                else:
+                    frame = avatar if args.kind == 'avatar' else np.hstack([webcam(k), avatar])
             encoder.write(frame)
             if k % 10 == 0:
                 progress((80 if avatar_dir else 0) + (20 if avatar_dir else 100) * k / count, f'Encoding {k}/{count}')

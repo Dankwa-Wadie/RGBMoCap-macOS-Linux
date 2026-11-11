@@ -85,7 +85,9 @@ class Avatar:
         self.bones = {h: arm.pose.bones[b] for h, b in self.human.items() if b in arm.pose.bones}
         self.order = sorted(arm.pose.bones, key=lambda pb: len(pb.parent_recursive))
         rest = lambda h: self.bones[h].bone.head_local
-        self.to_local = arm.matrix_world.inverted().to_3x3()
+        # Tracking is relative to the performer facing the camera, so it applies in the avatar's
+        # own frame: turning or moving the avatar object turns the whole performance with it.
+        self.to_local = Matrix.Identity(3)
         # Rest frames from the rig itself (armature space): side axis + up.
         has = lambda *hs: all(h in self.bones for h in hs)
         self.rest_frames = {}
