@@ -9,6 +9,8 @@ MODES = {
     'upper': 'Upper body (legs still)',
     'head': 'Head & face only',
 }
+import math
+
 LEGS = range(23, 33)
 HEAD = range(0, 11)
 # Leg landmark -> the one above it: a knee counts only with its hip, an ankle with its knee, heel/toe with the ankle.
@@ -26,14 +28,22 @@ def leg_chain(valid):
     return valid
 
 
-def lying(packet):
-    """Torso more than 45 deg from upright (pose in Blender axes, z up), shoulders and hips seen."""
-    v, P = packet['pose_valid'], packet.get('pose')
+def lying(packet, tilt=45.0):
+    """Torso more than `tilt` deg from upright in 3D (pose in Blender axes, z up) AND lying in the picture
+    (shoulders beside the hips rather than above them). The 3D guess alone tips over when knees or arms
+    hide the torso (sitting on the floor with knees up toward the camera); the 2D layout does not."""
+    v, P, img = packet['pose_valid'], packet.get('pose'), packet.get('pose_image')
     if not P or not all(v[i] for i in (11, 12, 23, 24)):
         return False
     d = [(P[11][k] + P[12][k] - P[23][k] - P[24][k]) / 2 for k in range(3)]
     n = sum(x * x for x in d) ** 0.5
-    return n > 1e-6 and d[2] / n < 0.707
+    if n < 1e-6 or d[2] / n > math.cos(math.radians(tilt)):
+        return False
+    if img:
+        dx = (img[11][0] + img[12][0] - img[23][0] - img[24][0]) / 2
+        dy = (img[11][1] + img[12][1] - img[23][1] - img[24][1]) / 2
+        return abs(dx) > abs(dy)
+    return True
 
 
 def auto_legs(packet):

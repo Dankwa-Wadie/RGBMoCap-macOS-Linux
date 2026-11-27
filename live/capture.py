@@ -88,7 +88,9 @@ def make_detectors(running_mode):
     pose = vision.PoseLandmarker.create_from_options(vision.PoseLandmarkerOptions(
         base_options=base('pose_landmarker_full.task'), running_mode=running_mode, num_poses=1))
     hands = vision.HandLandmarker.create_from_options(vision.HandLandmarkerOptions(
-        base_options=base('hand_landmarker.task'), running_mode=running_mode, num_hands=2))
+        base_options=base('hand_landmarker.task'), running_mode=running_mode, num_hands=2,
+        # 0.3 (default 0.5): on real webcam snapshots +59 % hands, all but 1 at a tracked wrist (0.2 added false hands).
+        min_hand_detection_confidence=0.3, min_hand_presence_confidence=0.3, min_tracking_confidence=0.3))
     return face, pose, hands
 
 

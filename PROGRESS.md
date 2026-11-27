@@ -93,6 +93,23 @@ points each bone at its child (hand -> middle finger, foot -> toe).
   (`.venv/bin/python tools/fetch_models.py --check`). Users get them automatically by putting
   `models_smplx_v1_1.zip` / `mano_v1_2.zip` in ~/Downloads, or `tools/fetch_models.py --mpi-email ...`.
 
+### 8. Stability pass
+- `tests_macos/live_stability_check.py -- PACKETS.jsonl [MODE]`: per body group, jitter (deg a bone sits off the
+  midpoint of its neighbours' frames), flicker (tracked<->untracked switches /100 frames) and lag (frames behind
+  the raw target). `LIVE_RECEIVER=path` scores another receiver version (A/B).
+- Receiver: grace (a bone that lost tracking holds 6 frames before easing to rest); adaptive smoothing in
+  `steady` (One-Euro-like on rotations: `SMOOTH, SMOOTH_HAND = 3.0, 8.0` deg; slow steady moves trail ~4-5 deg);
+  lying needs the 3D tilt AND the 2D picture layout (shoulders beside the hips) held `LYING_FRAMES = 8`
+  (sitting on the floor with knees up made the 3D torso guess tip over -> false lying).
+- Capture: hand detector thresholds 0.3 (default 0.5): +59 % hands on snapshots, all but 1 at a tracked wrist.
+- `track_modes.lying` (Auto legs when lying) uses the same 2D check.
+- Second real session (1185 packets, sitting on the floor with a phone), committed receiver vs new:
+  torso jitter 0.46 -> 0.28, head 1.10 -> 0.70, arms 1.04 -> 0.78, hands 2.16 -> 1.19, fingers 1.77 -> 1.04,
+  legs 0.26 -> 0.18 deg; flicker torso 0.86 -> 0.46, legs 0.37 -> 0.22, hands 1.10 -> 1.01; hands detected per
+  frame with a wrist in view 0.95 -> 1.56. No false lying on the floor; the lying session still lies down.
+- Head lag reads 3 frames on that session after the lying change (was 0); head barely moved there, so the
+  estimate may be noise - check on a recording with head turns.
+
 ## Not done / known limits
 - Offline **Retarget** in the app not tested: the sample project's ExMR result is still pending (no finished person).
 - Hand covering the nose can drop head tracking briefly (head eases to rest).

@@ -26,6 +26,9 @@ from mathutils import Matrix, Quaternion, Vector
 PORT = 49170
 SPIKE, SPIKE_FRAMES = 80.0, 3        # deg, frames: hold a sudden big flip until it persists
 MAX_STEP, MAX_STEP_HAND = 45.0, 30.0  # deg per frame
+SMOOTH, SMOOTH_HAND = 3.0, 8.0        # deg: changes this size move half way per frame; much larger ones at once
+LYING_FRAMES = 8                      # ~0.4 s of agreement before switching between upright and lying
+GRACE_FRAMES = 6                      # frames a bone that lost tracking holds before easing to rest
 
 # MediaPipe pose landmark indices
 L_SH, R_SH, L_EL, R_EL, L_WR, R_WR = 11, 12, 13, 14, 15, 16
@@ -104,6 +107,8 @@ class Avatar:
                 hand, middle, index, little = (rest(n) for n in names)
                 self.rest_frames[side + 'Hand'] = self.hand_frame(middle - hand, index - little)
         self.lying = False
+        self.lying_votes = 0
+        self.lost = {}                      # bone name -> frames since it was last tracked
         self.applied, self.spikes = {}, {}   # bone name -> last applied basis / frames a big jump has held
         self.hand_bones = {pb.name for h, pb in self.bones.items() if 'Hand' in h or any(f in h for f in ('Thumb', 'Index', 'Middle', 'Ring', 'Little'))}
         self.last_basis = {}   # bone name -> last tracked basis rotation
@@ -138,7 +143,16 @@ class Avatar:
                     # avatar follows the torso; back under ~35 deg the seated rule returns.
                     torso = ((P[L_SH] + P[R_SH]) / 2 - (P[L_HIP] + P[R_HIP]) / 2).normalized()
                     tilt = math.degrees(torso.angle(up)) if torso.length else 0.0
-                    self.lying = tilt > (35.0 if self.lying else 45.0)
+                    want = tilt > (35.0 if self.lying else 45.0)
+                    image = packet.get('pose_image')
+                    if want and image:  # and lying in the picture: shoulders beside the hips, not above them
+                        dx = (image[L_SH][0] + image[R_SH][0] - image[L_HIP][0] - image[R_HIP][0]) / 2
+                        dy = (image[L_SH][1] + image[R_SH][1] - image[L_HIP][1] - image[R_HIP][1]) / 2
+                        want = abs(dx) > abs(dy) * (0.8 if self.lying else 1.0)
+                    # switch only after it has held LYING_FRAMES (a tipped 3D guess flickers frame to frame)
+                    self.lying_votes = self.lying_votes + 1 if want != self.lying else 0
+                    if self.lying_votes >= LYING_FRAMES:
+                        self.lying, self.lying_votes = want, 0
                 if ok(L_HIP, R_HIP) and (legs_seen or self.lying):
                     mid_hip = (P[L_HIP] + P[R_HIP]) / 2
                     targets['hips'] = ('frame', frame_from(P[L_HIP] - P[R_HIP], mid_sh - mid_hip))
@@ -226,7 +240,10 @@ class Avatar:
                 self.last_basis[pb.name] = (inherited.inverted() @ matrix).to_quaternion()
             # Ease tracked bones in, and untracked ones (out of frame) back to their rest pose.
             w = self.weight.get(pb.name, 0.0)
-            w = min(1.0, w + 0.25) if tracked else max(0.0, w - 0.08)
+            # Grace: a bone that just lost tracking (a hand missed for a frame or two) holds its pose
+            # for GRACE_FRAMES before easing back, so short dropouts do not flicker.
+            self.lost[pb.name] = 0 if tracked else self.lost.get(pb.name, 0) + 1
+            w = min(1.0, w + 0.25) if tracked else w if self.lost[pb.name] <= GRACE_FRAMES else max(0.0, w - 0.08)
             self.weight[pb.name] = w
             basis = self.steady(pb.name, Quaternion().slerp(self.last_basis.get(pb.name, Quaternion()), w))
             matrix = inherited @ basis.to_matrix().to_4x4()
@@ -249,9 +266,14 @@ class Avatar:
                     return prev
             else:
                 self.spikes[name] = 0
-            limit = MAX_STEP_HAND if name in self.hand_bones else MAX_STEP
-            if angle > limit:
-                basis = prev.slerp(basis, limit / angle)
+            hand = name in self.hand_bones
+            limit = MAX_STEP_HAND if hand else MAX_STEP
+            # Adaptive smoothing (One-Euro-like on the rotation): small changes are mostly noise and are
+            # damped hard; large ones are real motion and pass almost at once (little lag).
+            soft = SMOOTH_HAND if hand else SMOOTH
+            step = min(angle, limit) * (angle / (angle + soft) if angle > 1e-6 else 1.0)
+            if angle > 1e-6 and step < angle:
+                basis = prev.slerp(basis, step / angle)
         self.applied[name] = basis.copy()
         return basis
 
