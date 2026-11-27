@@ -95,9 +95,10 @@ def make_detectors(running_mode):
 
 
 class Tracker:
-    def __init__(self, smooth=True):
+    def __init__(self, smooth=True, face_profile=None):
         self.face, self.pose, self.hands = make_detectors(vision.RunningMode.VIDEO)
         self.smooth = smooth
+        self.profile = face_profile  # live/face_profile.py: this performer's calibrated expressions
         self.filters = {}
         self.streak = None
         from concurrent.futures import ThreadPoolExecutor
@@ -121,6 +122,10 @@ class Tracker:
             names = [c.category_name for c in face.face_blendshapes[0]]
             scores = self.filt('face', [c.score for c in face.face_blendshapes[0]], t, min_cutoff=2.0, beta=0.5)
             packet['face'] = {n: round(float(s), 4) for n, s in zip(names, scores) if n != '_neutral'}
+            if self.profile:  # rescale to this performer's range, and name the expression they are making
+                import face_profile
+                packet['face'] = face_profile.normalize(packet['face'], self.profile)
+                packet['face_expr'] = list(face_profile.classify(packet['face'], self.profile))
         pose_image = None
         if pose.pose_world_landmarks:
             world = [[l.x, l.y, l.z] for l in pose.pose_world_landmarks[0]]
@@ -219,6 +224,9 @@ def main():
     ap.add_argument('--width', type=int, default=1280)
     ap.add_argument('--no-preview', action='store_true')
     ap.add_argument('--no-smooth', action='store_true')
+    ap.add_argument('--hfov', type=float, default=70.0,
+                    help='camera horizontal field of view in degrees (Blender "match webcam camera"; ~70 for webcams)')
+    ap.add_argument('--no-face-profile', action='store_true', help='ignore config/face_profile.json (raw face scores)')
     ap.add_argument('--track', choices=('auto', 'full', 'upper', 'head'), default='auto',
                     help='body parts that drive the avatar (auto: hips always, legs only when clearly seen; '
                          'upper: legs still; head: head and face only)')
@@ -240,7 +248,10 @@ def main():
     if not cap.isOpened():
         sys.exit('Cannot open the camera. On macOS, allow camera access for your terminal app in '
                  'System Settings > Privacy & Security > Camera, then retry.')
-    tracker = Tracker(smooth=not args.no_smooth)
+    import face_profile
+    profile = None if args.no_face_profile else face_profile.load()
+    print('Face profile:', 'calibrated (config/face_profile.json)' if profile else 'none (run live/face_calibrate.py)', flush=True)
+    tracker = Tracker(smooth=not args.no_smooth, face_profile=profile)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     # macOS limits a datagram to the send buffer (9 KB by default); previews need ~40 KB.
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
@@ -265,6 +276,7 @@ def main():
             t_ms = int(count * 1000 / video_fps) if args.video else int((time.monotonic() - start) * 1000)
             packet, results = tracker(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), t_ms)
             packet['frame'] = count
+            packet['image'] = [frame.shape[1], frame.shape[0], args.hfov]  # w, h, horizontal FOV: camera matching
             if args.track != 'full':
                 from track_modes import apply_mode
                 packet = apply_mode(packet, args.track)

@@ -110,7 +110,44 @@ points each bone at its child (hand -> middle finger, foot -> toe).
 - Head lag reads 3 frames on that session after the lying change (was 0); head barely moved there, so the
   estimate may be noise - check on a recording with head turns.
 
+### 9. Personal face calibration
+- `live/face_profile.py`: profile from labelled face samples: per blendshape neutral (median of the neutral
+  hold) and top (95th percentile), `normalize` -> 0..1 in this performer's range; nearest-centroid classifier
+  over the expression blendshapes only (eyeLook*/eyeBlink* ignored: a glance during the "sad" step had made
+  gaze direction decide "sad"). `python live/face_profile.py` runs a self-check.
+- `live/face_calibrate.py`: guided window, 7 steps (neutral, happy, sad, angry, surprised, eyes closed, mouth
+  open); each step waits for a visible face and records 3 s of face frames (gives up after 30 s). Writes
+  `config/face_profile.json` + `config/face_samples.json` (both git-ignored personal data); `--samples` rebuilds
+  without the camera. App: Live panel > Calibrate Face… (stops the camera while it runs).
+- Capture loads the profile automatically (`--no-face-profile` to skip): `packet['face']` is rescaled and
+  `packet['face_expr'] = [label, confidence]`. Receiver (visor): uses the label at confidence >= 0.35, switches
+  after it holds 3 frames, else the old blendshape rule.
+- Real calibration run: 91 face frames per step, held-out accuracy 1.0 (optimistic: same 3 s hold); centroid
+  separation: angry/surprised/happy far apart, sad closest to neutral (subtle sad face). Not yet checked live
+  with the performer making faces at the camera (the live test session had the face turned away).
+
+### 10. Match webcam camera
+- Receiver `CameraMatch`: per packet, fits a pinhole camera (position + yaw/pitch/roll; horizontal FOV from the
+  packet, capture `--hfov`, default 70) so the avatar's posed joints land on the performer's joints in the
+  picture (damped Gauss-Newton from the last solution; joints that count are the valid shoulders/elbows/
+  wrists/hips/knees/ankles; knees/ankles weight 0.3; roll prior: webcams stand upright). Holds with < 4 joints
+  or error > 6 % of the picture; smoothed. Camera `RGBMoCap_MatchCam`, render aspect = webcam aspect.
+  Blender panel checkbox "Match webcam camera" (shows the fit error); app Live panel checkbox sends
+  `{'cmd': 'match_camera'}`. Capture sends `packet['image'] = [w, h, hfov]`.
+- `tests_macos/live_camera_check.py -- REC OUT`: renders the avatar through the solved camera over every
+  camera snapshot. Real sessions: standing/lying/reclining/arm out/hand on head/close-up all overlay the
+  performer (median error 1.5 % of the picture); floor sitting 3.5 %; lying on the side 1.9 %.
+- Also: receiver holds the torso when the shoulders collapse to a point in the picture (`torso_readable`).
+- The app's "Open Avatar in Blender…" accepts a prepared `.blend` (e.g. the visor) as well as VRM.
+- Tried and rejected: MediaPipe heavy pose model (same failures on the floor frames, 61 vs 21 ms/frame);
+  dropping upright hips at the bottom edge (broke the reclining shot); a face-roll vs torso check (could not be
+  validated on the recordings).
+
 ## Not done / known limits
+- MediaPipe pose misreads that no receiver rule can fix: sitting on the floor with knees up toward the camera
+  and a phone in front of the chest (body laid sideways across the bed, legs splayed), and lying with the back
+  to the camera (head and feet swapped). The avatar and the matched camera follow the misread.
+- Camera match holds the last framing when too few joints are seen (e.g. only a hip filling the frame).
 - Offline **Retarget** in the app not tested: the sample project's ExMR result is still pending (no finished person).
 - Hand covering the nose can drop head tracking briefly (head eases to rest).
 - An arm raised out of the top of the frame now hangs down (trade-off of "unseen arms hang").

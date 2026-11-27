@@ -119,3 +119,5 @@ third_party/KimodoMotionCorrection/bin/*.so
 .DS_Store
 .venv-live/
 .venv-splat/
+/config/face_profile.json
+/config/face_samples.json

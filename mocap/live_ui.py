@@ -150,8 +150,14 @@ class LivePanel(QWidget):
         for key, label in MODES.items():
             self.track.addItem(label, key)
         self.blender_button = QPushButton('Open Avatar in Blender…')
-        self.blender_button.setToolTip('Open a VRM avatar (default: Seed-san) in Blender with the live receiver')
+        self.blender_button.setToolTip('Open a VRM avatar (default: Seed-san) or a prepared avatar .blend '
+                                       '(build/avatars, e.g. the visor) in Blender with the live receiver')
         self.blender_button.clicked.connect(self.open_blender)
+        self.face_button = QPushButton('Calibrate Face…')
+        self.face_button.setToolTip('Learn your own expressions (about 35 s of guided faces). The camera stops while '
+                                    'it runs; the profile stays on this computer (config/face_profile.json).')
+        self.face_button.clicked.connect(self.calibrate_face)
+        self.face_process = None
         self.send_blender = QCheckBox('Send to Blender'); self.send_blender.setChecked(True)
         self.key_blender = QCheckBox('Key in Blender while recording'); self.key_blender.setChecked(True)
         self.unmirror = QCheckBox('Un-mirror camera'); self.unmirror.setChecked(True)
@@ -164,11 +170,15 @@ class LivePanel(QWidget):
         self.mirror.toggled.connect(lambda _: self.sync_backdrop(force=True))
         self._backdrop_sync = 0.0
         self.last_jpeg = None
+        self.match_camera = QCheckBox('Match webcam camera')
+        self.match_camera.setToolTip('Move a Blender camera so the avatar is framed like you are on the webcam '
+                                     '(same height, distance, tilt and crop). Blender: RGBMoCap_MatchCam.')
+        self.match_camera.toggled.connect(lambda _: self.sync_backdrop(force=True))
         self.backdrop = QCheckBox('Webcam background in Blender')
         self.backdrop.setToolTip('Show the live camera image on a backdrop behind the avatar in Blender')
         self.key_blender.setToolTip('Record straight into a new Blender Action as you perform (Blender must be open)')
         for w in (self.camera, self.track, self.unmirror, self.mirror, self.start_button, self.pause_button, self.record_button, self.send_blender,
-                  self.key_blender, self.backdrop, self.blender_button):
+                  self.key_blender, self.match_camera, self.backdrop, self.blender_button, self.face_button):
             row.addWidget(w)
         row.addStretch(1)
         self.status = QLabel('Choose a camera and press Start Camera.'); self.status.setObjectName('muted')
@@ -303,11 +313,12 @@ class LivePanel(QWidget):
             self.out.writeDatagram(payload, QHostAddress.LocalHost, BLENDER_PORT)
 
     def sync_backdrop(self, force=False):
-        """Keep Blender's backdrop mirrored like the preview (resent every 2 s: UDP may drop)."""
+        """Keep Blender's backdrop mirroring and camera matching like the panel (resent every 2 s: UDP may drop)."""
         now = time.monotonic()
         if force or now - self._backdrop_sync > 2.0:
             self._backdrop_sync = now
             self.control({'cmd': 'backdrop', 'mirror': self.mirror.isChecked()})
+            self.control({'cmd': 'match_camera', 'on': self.match_camera.isChecked()})
 
     def control(self, command):
         self.out.writeDatagram(json.dumps(command).encode(), QHostAddress.LocalHost, BLENDER_PORT)
@@ -523,8 +534,14 @@ class LivePanel(QWidget):
             QMessageBox.warning(self, 'Blender', 'Blender was not found. Install it in /Applications or set RGBMOCAP_BLENDER.')
             return
         default = ROOT / 'live/avatars/Seed-san.vrm'
-        vrm, _ = QFileDialog.getOpenFileName(self, 'Avatar (VRM 1.0)', str(default), 'VRM avatars (*.vrm)')
+        vrm, _ = QFileDialog.getOpenFileName(self, 'Avatar (VRM 1.0 or prepared .blend)', str(default),
+                                             'Avatars (*.vrm *.blend)')
         if not vrm:
+            return
+        if vrm.endswith('.blend'):  # already prepared (e.g. live/visor_avatar/build.sh): open it as is
+            subprocess.Popen([str(blender), vrm, '--python', str(ROOT / 'live/blender/start_live.py')],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            self.status.setText(f'Opening {Path(vrm).stem} in Blender with the live receiver…')
             return
         vrm = Path(vrm); self.avatar_vrm = vrm; blend = ROOT / 'build/avatars' / (vrm.stem + '.blend')
         blend.parent.mkdir(parents=True, exist_ok=True)
@@ -538,6 +555,33 @@ class LivePanel(QWidget):
         subprocess.Popen([str(blender), str(blend), '--python', str(ROOT / 'live/blender/start_live.py')],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         self.status.setText(f'Opening {vrm.stem} in Blender with the live receiver…')
+
+    def calibrate_face(self):
+        """Guided face calibration in its own window (live/face_calibrate.py); needs the camera to itself."""
+        if self.face_process is not None:
+            return
+        self.stop_capture()
+        self.face_process = QProcess(self)
+        self.face_process.setProcessChannelMode(QProcess.MergedChannels)
+        self.face_process.readyReadStandardOutput.connect(self.face_output)
+        self.face_process.finished.connect(self.face_finished)
+        self.face_process.start(str(self.capture_python()), ['-u', str(ROOT / 'live/face_calibrate.py'),
+                                                            '--camera', str(self.camera.currentData())])
+        self.status.setText('Face calibration: follow the prompts in its window…')
+
+    def face_output(self):
+        for line in bytes(self.face_process.readAllStandardOutput()).decode('utf-8', 'replace').splitlines():
+            if line.startswith(('STEP', 'ACCURACY', 'WARNING')):
+                self.status.setText('Face calibration: ' + line.split(' ', 1)[-1])
+                if line.startswith('ACCURACY'):
+                    self.face_result = line
+
+    def face_finished(self, code, _status):
+        result = getattr(self, 'face_result', None)
+        self.status.setText('Face profile saved (' + result.split()[0].lower() + ' ' + result.split()[1] +
+                            '). Start the camera to use it.' if code == 0 and result else
+                            'Face calibration did not finish.')
+        self.face_process = None; self.face_result = None
 
     def update_buttons(self):
         live = self.process is not None

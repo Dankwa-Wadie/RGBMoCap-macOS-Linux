@@ -27,7 +27,9 @@ PORT = 49170
 SPIKE, SPIKE_FRAMES = 80.0, 3        # deg, frames: hold a sudden big flip until it persists
 MAX_STEP, MAX_STEP_HAND = 45.0, 30.0  # deg per frame
 SMOOTH, SMOOTH_HAND = 3.0, 8.0        # deg: changes this size move half way per frame; much larger ones at once
+TORSO_SPAN = 0.35                     # shoulder span / (half torso or nose-shoulder height) below this = unreadable
 LYING_FRAMES = 8                      # ~0.4 s of agreement before switching between upright and lying
+EXPR_CONFIDENCE, EXPR_FRAMES = 0.35, 3   # visor: calibrated expression confidence; frames before it shows
 GRACE_FRAMES = 6                      # frames a bone that lost tracking holds before easing to rest
 
 # MediaPipe pose landmark indices
@@ -116,6 +118,7 @@ class Avatar:
         # Pixel-screen face (an avatar with 'rgbmocap_visor'): pre-painted images 'visor_face:<expr>_<blink>_<talk>_<gaze>'.
         visor = json.loads(arm.get('rgbmocap_visor', 'null'))
         mat = visor and bpy.data.materials.get(visor['material'])
+        self.visor_expr, self.visor_next, self.visor_votes = 'neutral', None, 0
         self.visor_node = mat and next((n for n in mat.node_tree.nodes if n.type == 'TEX_IMAGE'), None)
         self.shape_targets = [o for o in bpy.data.objects if o.type == 'MESH' and o.data.shape_keys
                               and any(m.type == 'ARMATURE' and m.object == arm for m in o.modifiers)]
@@ -136,7 +139,7 @@ class Avatar:
             ok = lambda *ids: all(valid[i] for i in ids)
             mid_sh = (P[L_SH] + P[R_SH]) / 2
             up = self.to_local @ Vector((0, 0, 1))
-            if ok(L_SH, R_SH):
+            if ok(L_SH, R_SH) and self.torso_readable(packet, ok):
                 legs_seen = ok(L_KN, R_KN) or ok(L_KN, L_AN) or ok(R_KN, R_AN)
                 if ok(L_HIP, R_HIP):
                     # Upright (standing/sitting) vs lying: past ~45 deg from vertical the whole
@@ -198,7 +201,21 @@ class Avatar:
             targets['neck'] = ('blend', ('chest', 'head'))
         self.pose_bones(targets)
         if packet.get('face'):
-            self.apply_face(packet['face'])
+            self.apply_face(packet['face'], packet.get('face_expr'))
+
+    @staticmethod
+    def torso_readable(packet, ok):
+        """False when the shoulders collapse to a point in the picture (torso hidden behind knees, a phone,
+        or seen edge-on): the side axis is then noise and the torso would spin; it holds its last pose instead."""
+        image = packet.get('pose_image')
+        if not image:
+            return True
+        span = math.dist(image[L_SH], image[R_SH])
+        ref = math.dist(image[NOSE], [(image[L_SH][0] + image[R_SH][0]) / 2, (image[L_SH][1] + image[R_SH][1]) / 2])
+        if ok(L_HIP, R_HIP):
+            ref = max(ref, math.dist([(image[L_SH][0] + image[R_SH][0]) / 2, (image[L_SH][1] + image[R_SH][1]) / 2],
+                                     [(image[L_HIP][0] + image[R_HIP][0]) / 2, (image[L_HIP][1] + image[R_HIP][1]) / 2]) * 0.5)
+        return span > TORSO_SPAN * ref
 
     def world_rotation(self, human, kind, value, absolute):
         rest = self.rest_frames.get(human)
@@ -250,6 +267,7 @@ class Avatar:
             posed[pb.name] = matrix
             pb.rotation_mode = 'QUATERNION'
             pb.rotation_quaternion = basis
+        self.posed = posed
 
     def steady(self, name, basis):
         """Tracking glitches (a hand misread for a frame or two, swapped hands) flip bones by 90-150 deg and
@@ -310,10 +328,20 @@ class Avatar:
                 old_dir = targets[h][1] if h in targets and targets[h][0] == 'dir' else v
                 targets[h] = ('dir', old_dir.normalized().lerp(v.normalized(), k))
 
-    def apply_visor(self, face):
+    def apply_visor(self, face, named=None):
         e = vrm_expressions(face)
-        expr = max(('happy', 'sad', 'angry', 'surprised'), key=e.get)
-        expr = expr if e[expr] > 0.35 else 'neutral'
+        if named and named[0] and named[1] >= EXPR_CONFIDENCE:
+            expr = named[0]  # the performer's own calibrated expression (live/face_profile.py)
+        else:
+            expr = max(('happy', 'sad', 'angry', 'surprised'), key=e.get)
+            expr = expr if e[expr] > 0.35 else 'neutral'
+        # A new expression shows once it has held EXPR_FRAMES frames (no flicker between two close faces).
+        if expr != self.visor_expr:
+            self.visor_votes = self.visor_votes + 1 if expr == self.visor_next else 1
+            self.visor_next = expr
+            if self.visor_votes >= EXPR_FRAMES:
+                self.visor_expr = expr
+        expr = self.visor_expr
         blink = int(min(e['blinkLeft'], e['blinkRight']) > 0.5)
         talk = (0, 0.5, 1)[min(2, int(e['aa'] * 3))]
         g = e['lookLeft'] - e['lookRight']  # performer's left = the avatar's left = viewer's right (+x on the screen)
@@ -322,9 +350,9 @@ class Avatar:
         if image and self.visor_node.image != image:
             self.visor_node.image = image
 
-    def apply_face(self, face):
+    def apply_face(self, face, named=None):
         if self.visor_node:
-            self.apply_visor(face)
+            self.apply_visor(face, named)
         weights = {}
         for name, value in vrm_expressions(face).items():
             for obj_name, key, w in self.expressions.get(name, []):
@@ -339,11 +367,127 @@ class Avatar:
                     blocks[key].value = min(1.0, value)
 
 
+# MediaPipe pose landmark -> humanoid bone whose head sits at that joint (camera matching).
+JOINT_BONES = {11: 'leftUpperArm', 12: 'rightUpperArm', 13: 'leftLowerArm', 14: 'rightLowerArm',
+               15: 'leftHand', 16: 'rightHand', 23: 'leftUpperLeg', 24: 'rightUpperLeg',
+               25: 'leftLowerLeg', 26: 'rightLowerLeg', 27: 'leftFoot', 28: 'rightFoot'}
+
+
+ROLL_PRIOR, LEG_WEIGHT = 2.0, 0.3     # camera matching: keep the webcam upright; knees/ankles count less
+
+
+class CameraMatch:
+    """A Blender camera that sees the avatar the way the webcam sees the performer: same framing, height, tilt
+    and crop (sitting on the floor with only the upper body in view -> the avatar is framed the same).
+
+    Each packet: the avatar's posed joints (world) and the performer's joints in the picture (normalized x, y)
+    give a pinhole camera fit (position + yaw/pitch/roll, fixed horizontal FOV from the packet) by damped
+    Gauss-Newton from the previous solution. Only confidently seen joints count; with fewer than MIN_POINTS,
+    or a poor fit, the camera holds. The result is smoothed so the shot does not shake."""
+    MIN_POINTS, MAX_ERROR, SMOOTH = 4, 0.06, 0.25
+
+    def __init__(self):
+        self.params = None          # solved [x, y, z, yaw, pitch, roll]
+        self.shown = None           # smoothed params applied to the camera
+        self.error = None
+
+    @staticmethod
+    def rotation(yaw, pitch, roll):
+        import numpy as np
+        cy, sy, cp, sp, cr, sr = math.cos(yaw), math.sin(yaw), math.cos(pitch), math.sin(pitch), math.cos(roll), math.sin(roll)
+        # camera axes (columns): right, up, back (-view). Facing +Y at yaw = 0, pitch tilts the view up.
+        Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+        Rx = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]])
+        Rroll = np.array([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]])
+        base = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]])  # right = +X, up = +Z, back = -Y
+        return Rz @ base @ Rx @ Rroll
+
+    def project(self, p, X, aspect, f):
+        import numpy as np
+        R = self.rotation(*p[3:])
+        q = (X - p[:3]) @ R                      # camera space: x right, y up, z back
+        depth = np.maximum(-q[:, 2], 1e-3)
+        return np.stack([0.5 + f * q[:, 0] / depth / aspect, 0.5 - f * q[:, 1] / depth], 1)
+
+    def solve(self, X, uv, aspect, hfov, weights=None):
+        import numpy as np
+        f = 0.5 * aspect / math.tan(math.radians(hfov) / 2)   # in units of image height
+        p = np.array(self.params if self.params is not None else
+                     [X[:, 0].mean(), X[:, 1].mean() - 3.0, X[:, 2].mean(), 0.0, 0.0, 0.0], float)
+        prior = p.copy()
+        w = np.repeat(weights if weights is not None else np.ones(len(X)), 2)
+        def residual(p):
+            r = (self.project(p, X, aspect, f) - uv).ravel() * w
+            # priors: webcams stand upright (roll ~0), and stay near the last solution when few joints constrain it
+            return np.concatenate([r, [p[5] * ROLL_PRIOR], (p - prior) * np.array([0.02, 0.02, 0.02, 0.05, 0.05, 0.05])])
+        lam = 1e-3
+        for _ in range(12):
+            r = residual(p)
+            J = np.empty((r.size, 6)); eps = 1e-4
+            for k in range(6):
+                d = np.zeros(6); d[k] = eps
+                J[:, k] = (residual(p + d) - r) / eps
+            step = np.linalg.solve(J.T @ J + lam * np.eye(6), -J.T @ r)
+            if (residual(p + step) ** 2).sum() < (r ** 2).sum():
+                p, lam = p + step, lam * 0.5
+            else:
+                lam *= 4
+            if np.abs(step).max() < 1e-5:
+                break
+        err = float(np.sqrt(((self.project(p, X, aspect, f) - uv) ** 2).sum(1)).mean())
+        return p, err
+
+    def update(self, avatar, packet):
+        """Fit to this packet; returns the smoothed params (or None before the first good fit)."""
+        import numpy as np
+        image, uv_all, valid = packet.get('image'), packet.get('pose_image'), packet.get('pose_valid')
+        posed = getattr(avatar, 'posed', None)
+        if not (image and uv_all and valid and posed):
+            return self.shown
+        ids = [i for i, h in JOINT_BONES.items() if valid[i] and h in avatar.bones]
+        if len(ids) < self.MIN_POINTS:
+            return self.shown
+        world = avatar.arm.matrix_world
+        X = np.array([tuple(world @ posed[avatar.bones[JOINT_BONES[i]].name].to_translation()) for i in ids])
+        uv = np.array([uv_all[i] for i in ids], float)
+        aspect = image[0] / max(1, image[1])
+        # leg joints: least reliable in depth (knees toward the camera), so they steer the shot less
+        weights = np.array([LEG_WEIGHT if i >= 25 else 1.0 for i in ids])
+        p, err = self.solve(X, uv, aspect, image[2] if len(image) > 2 else 70.0, weights)
+        self.error = err
+        if err > self.MAX_ERROR or not np.all(np.isfinite(p)):
+            return self.shown
+        self.params = p
+        self.shown = p if self.shown is None else self.shown + (p - self.shown) * self.SMOOTH
+        return self.shown
+
+    def apply(self, scene, packet):
+        """Put the smoothed fit on the 'RGBMoCap_MatchCam' camera and make it the scene camera."""
+        if self.shown is None:
+            return
+        from mathutils import Matrix
+        cam = bpy.data.objects.get('RGBMoCap_MatchCam')
+        if cam is None:
+            cam = bpy.data.objects.new('RGBMoCap_MatchCam', bpy.data.cameras.new('RGBMoCap_MatchCam'))
+            scene.collection.objects.link(cam)
+        image = packet.get('image') or [16, 9, 70.0]
+        cam.data.sensor_fit = 'HORIZONTAL'; cam.data.sensor_width = 36.0
+        cam.data.lens = 18.0 / math.tan(math.radians(image[2] if len(image) > 2 else 70.0) / 2)
+        R = self.rotation(*self.shown[3:])
+        cam.matrix_world = Matrix([[R[0][0], R[0][1], R[0][2], self.shown[0]], [R[1][0], R[1][1], R[1][2], self.shown[1]],
+                                   [R[2][0], R[2][1], R[2][2], self.shown[2]], [0, 0, 0, 1]])
+        scene.camera = cam
+        w, h = image[0], image[1]
+        if scene.render.resolution_x * h != scene.render.resolution_y * w:  # same aspect as the webcam
+            scene.render.resolution_y = round(scene.render.resolution_x * h / w)
+
+
 class Receiver:
     def __init__(self):
         self.sock = None; self.avatar = None; self.recording = None; self.last = None; self.frames = 0
         self.live_keys = None  # while recording live: {'action', 't0', 'fps', 'start', 'frame', 'count'}
         self.backdrop_jpeg = None; self.backdrop_at = 0.0; self.backdrop_mirror = False
+        self.camera_match = CameraMatch()
 
     def start(self, arm, port=PORT):
         self.avatar = Avatar(arm)
@@ -452,6 +596,8 @@ class Receiver:
     def command(self, value):
         if value['cmd'] == 'backdrop':
             self.set_backdrop_mirror(bool(value.get('mirror')))
+        elif value['cmd'] == 'match_camera':
+            bpy.context.scene.rgbmocap_match_camera = bool(value.get('on'))
         elif value['cmd'] == 'live_record_start' and self.avatar is not None:
             arm = self.avatar.arm; arm.animation_data_create()
             from datetime import datetime
@@ -485,6 +631,9 @@ class Receiver:
             self.update_backdrop()
         if packet:
             self.avatar.apply(packet); self.last = packet; self.frames += 1
+            scene = bpy.context.scene
+            if getattr(scene, 'rgbmocap_match_camera', False):
+                self.camera_match.update(self.avatar, packet); self.camera_match.apply(scene, packet)
             if self.recording is not None:
                 self.recording.append(packet)
             if self.live_keys is not None:
@@ -556,6 +705,9 @@ class RGBMOCAP_PT_live(bpy.types.Panel):
         if listening:
             col.operator('rgbmocap.live_record', text='Stop Recording + Bake' if RECEIVER.recording is not None else 'Record')
             col.label(text=f'Frames received: {RECEIVER.frames}')
+        col.prop(context.scene, 'rgbmocap_match_camera')
+        if context.scene.rgbmocap_match_camera and RECEIVER.camera_match.error is not None:
+            col.label(text=f'Camera fit error: {RECEIVER.camera_match.error * 100:.1f} % of the picture')
         arm = avatar_armature(context)
         col.label(text=f'Avatar: {arm.name if arm else "none"}')
         if arm is not None and arm.get('rgbmocap_credit'):
@@ -568,9 +720,13 @@ CLASSES = (RGBMOCAP_OT_live_start, RGBMOCAP_OT_live_stop, RGBMOCAP_OT_live_recor
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
+    bpy.types.Scene.rgbmocap_match_camera = bpy.props.BoolProperty(
+        name='Match webcam camera', default=False,
+        description='Move a camera (RGBMoCap_MatchCam) so the avatar is framed like you are on the webcam')
 
 
 def unregister():
     RECEIVER.stop()
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
+    del bpy.types.Scene.rgbmocap_match_camera
