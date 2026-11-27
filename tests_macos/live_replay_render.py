@@ -16,6 +16,7 @@ spec = importlib.util.spec_from_file_location('rgbmocap_live', root / 'live/blen
 live = importlib.util.module_from_spec(spec); spec.loader.exec_module(live)
 src = (root / 'live/capture.py').read_text()
 ns = {}; exec(src[src.index('LEGS = '):src.index('class OneEuro')], ns)   # landmark_valid + LEGS
+sys.path.insert(0, str(root / 'live')); from track_modes import leg_chain
 STABLE = int(src.split('STABLE_FRAMES = ')[1].split()[0])
 arm = next(o for o in bpy.data.objects if o.type == 'ARMATURE' and 'rgbmocap_humanoid' in o)
 av = live.Avatar(arm); scene = bpy.context.scene
@@ -31,7 +32,7 @@ for line in (rec / 'packets.jsonl').open():
         img = p.get('pose_image') or [[0.5, 0.5]] * len(p['pose'])
         raw = [ns['landmark_valid'](i, v, x, y) for i, (v, (x, y)) in enumerate(zip(p['pose_visibility'], img))]
         streak = [s + 1 if r else 0 for s, r in zip(streak or [0] * len(raw), raw)]
-        p['pose_valid'] = [s >= STABLE for s in streak]
+        p['pose_valid'] = leg_chain([s >= STABLE for s in streak])
     sys.path.insert(0, str(root / 'live')); from track_modes import apply_mode
     p = apply_mode(p, mode)
     av.apply(p)

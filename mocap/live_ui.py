@@ -141,7 +141,8 @@ class LivePanel(QWidget):
         self.record_button = QPushButton('● Record'); self.record_button.setCheckable(True)
         self.record_button.toggled.connect(self.toggle_record)
         self.track = QComboBox(); self.track.setToolTip(
-            'Which body parts drive the avatar. Use Upper body when seated or partly in frame, '
+            'Which body parts drive the avatar. Auto follows what the camera sees: hips always, legs only when '
+            'clearly in view (seated = legs still, standing in full view = full body). Upper body locks the legs, '
             'Head & face when lying down or when body tracking is unreliable.')
         sys.path.insert(0, str(ROOT / 'live'))
         from track_modes import MODES, apply_mode

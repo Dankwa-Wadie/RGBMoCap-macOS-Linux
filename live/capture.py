@@ -28,6 +28,8 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision
 
+from track_modes import leg_chain  # live/ is the script's folder
+
 ROOT = Path(__file__).resolve().parents[1]
 MODELS = ROOT / 'models' / 'live'
 PORT = 49170
@@ -38,6 +40,8 @@ LEGS = range(23, 33)
 
 def landmark_valid(index, visibility, x, y):
     """Legs get a strict rule (MediaPipe invents legs outside the picture); the rest a normal one."""
+    if index in (23, 24):  # hips: rarely invented, and lying near the bottom edge needs them (lying detection)
+        return visibility > 0.9 and 0.0 < x < 1.0 and 0.0 < y < 1.04  # a lying body's hips touch the bottom edge
     if index in LEGS:
         return visibility > 0.75 and 0.03 < x < 0.97 and 0.03 < y < 0.97
     return visibility > 0.5 and 0.0 < x < 1.0 and 0.0 < y < 1.0
@@ -131,7 +135,7 @@ class Tracker:
             if self.streak is None or len(self.streak) != len(raw):
                 self.streak = [0] * len(raw)
             self.streak = [s + 1 if r else 0 for s, r in zip(self.streak, raw)]
-            packet['pose_valid'] = [s >= STABLE_FRAMES for s in self.streak]
+            packet['pose_valid'] = leg_chain([s >= STABLE_FRAMES for s in self.streak])
         if hands.hand_world_landmarks:
             packet['hands'] = {}
             for image_points, world_points in zip(hands.hand_landmarks, hands.hand_world_landmarks):
@@ -213,8 +217,9 @@ def main():
     ap.add_argument('--width', type=int, default=1280)
     ap.add_argument('--no-preview', action='store_true')
     ap.add_argument('--no-smooth', action='store_true')
-    ap.add_argument('--track', choices=('full', 'upper', 'head'), default='full',
-                    help='body parts that drive the avatar (upper: legs still; head: head and face only)')
+    ap.add_argument('--track', choices=('auto', 'full', 'upper', 'head'), default='auto',
+                    help='body parts that drive the avatar (auto: hips always, legs only when clearly seen; '
+                         'upper: legs still; head: head and face only)')
     ap.add_argument('--no-overlay', action='store_true', help='app mode: send the plain camera image')
     ap.add_argument('--unmirror', action='store_true',
                     help='flip camera frames before tracking (for cameras that deliver selfie-mirrored images, '

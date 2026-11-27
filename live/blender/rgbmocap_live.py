@@ -24,6 +24,8 @@ import bpy
 from mathutils import Matrix, Quaternion, Vector
 
 PORT = 49170
+SPIKE, SPIKE_FRAMES = 80.0, 3        # deg, frames: hold a sudden big flip until it persists
+MAX_STEP, MAX_STEP_HAND = 45.0, 30.0  # deg per frame
 
 # MediaPipe pose landmark indices
 L_SH, R_SH, L_EL, R_EL, L_WR, R_WR = 11, 12, 13, 14, 15, 16
@@ -102,8 +104,14 @@ class Avatar:
                 hand, middle, index, little = (rest(n) for n in names)
                 self.rest_frames[side + 'Hand'] = self.hand_frame(middle - hand, index - little)
         self.lying = False
+        self.applied, self.spikes = {}, {}   # bone name -> last applied basis / frames a big jump has held
+        self.hand_bones = {pb.name for h, pb in self.bones.items() if 'Hand' in h or any(f in h for f in ('Thumb', 'Index', 'Middle', 'Ring', 'Little'))}
         self.last_basis = {}   # bone name -> last tracked basis rotation
         self.weight = {}       # bone name -> 0..1 tracking weight (eases in/out)
+        # Pixel-screen face (an avatar with 'rgbmocap_visor'): pre-painted images 'visor_face:<expr>_<blink>_<talk>_<gaze>'.
+        visor = json.loads(arm.get('rgbmocap_visor', 'null'))
+        mat = visor and bpy.data.materials.get(visor['material'])
+        self.visor_node = mat and next((n for n in mat.node_tree.nodes if n.type == 'TEX_IMAGE'), None)
         self.shape_targets = [o for o in bpy.data.objects if o.type == 'MESH' and o.data.shape_keys
                               and any(m.type == 'ARMATURE' and m.object == arm for m in o.modifiers)]
 
@@ -147,6 +155,16 @@ class Avatar:
             for h, (a, b) in LIMBS.items():
                 if ok(a, b):
                     targets[h] = ('dir', P[b] - P[a])
+            # An arm the camera cannot see (below the frame at a desk, or shoulders out of the top when
+            # close to the camera) hangs at the side instead of easing back to the rig's A-/T-pose.
+            down = -(mid_sh - (P[L_HIP] + P[R_HIP]) / 2 if ok(L_SH, R_SH, L_HIP, R_HIP) else up).normalized()
+            for side in ('left', 'right'):
+                if side + 'UpperArm' not in targets:
+                    targets[side + 'UpperArm'] = ('dir', down)
+                if side + 'LowerArm' not in targets:
+                    targets[side + 'LowerArm'] = ('dir', targets[side + 'UpperArm'][1])
+            if ok(L_SH, R_SH, L_EAR, R_EAR):
+                self.reach_head(P, ok, targets)
             if ok(NOSE, L_EAR, R_EAR) or ok(NOSE, L_SH, R_SH):
                 ear_x = P[L_EAR] - P[R_EAR]; forward = P[NOSE] - (P[L_EAR] + P[R_EAR]) / 2
                 targets['head'] = ('frame', frame_from(ear_x, forward.cross(ear_x)))
@@ -210,13 +228,81 @@ class Avatar:
             w = self.weight.get(pb.name, 0.0)
             w = min(1.0, w + 0.25) if tracked else max(0.0, w - 0.08)
             self.weight[pb.name] = w
-            basis = Quaternion().slerp(self.last_basis.get(pb.name, Quaternion()), w)
+            basis = self.steady(pb.name, Quaternion().slerp(self.last_basis.get(pb.name, Quaternion()), w))
             matrix = inherited @ basis.to_matrix().to_4x4()
             posed[pb.name] = matrix
             pb.rotation_mode = 'QUATERNION'
             pb.rotation_quaternion = basis
 
+    def steady(self, name, basis):
+        """Tracking glitches (a hand misread for a frame or two, swapped hands) flip bones by 90-150 deg and
+        back. A jump over SPIKE deg is held until it persists SPIKE_FRAMES frames; every bone then turns at
+        most MAX_STEP deg per frame (hands/fingers less), so real fast moves still come through."""
+        prev = self.applied.get(name)
+        if prev is not None:
+            if prev.dot(basis) < 0:
+                basis = -basis
+            angle = math.degrees(prev.rotation_difference(basis).angle)
+            if angle > SPIKE:
+                self.spikes[name] = self.spikes.get(name, 0) + 1
+                if self.spikes[name] < SPIKE_FRAMES:
+                    return prev
+            else:
+                self.spikes[name] = 0
+            limit = MAX_STEP_HAND if name in self.hand_bones else MAX_STEP
+            if angle > limit:
+                basis = prev.slerp(basis, limit / angle)
+        self.applied[name] = basis.copy()
+        return basis
+
+    def reach_head(self, P, ok, targets):
+        """Hand at the face (touching, scratching, thinking): limb directions alone miss on an avatar with
+        other proportions. Place the wrist where it is relative to the head, scaled to the avatar, and
+        solve the arm as two bones, the elbow bending toward the performer's."""
+        has = lambda *hs: all(h in self.bones for h in hs)
+        if not has('head', 'leftUpperArm', 'rightUpperArm', 'leftLowerArm', 'rightLowerArm', 'leftHand', 'rightHand'):
+            return
+        rest = lambda h: self.bones[h].bone.head_local
+        scale = (rest('leftUpperArm') - rest('rightUpperArm')).length / max(1e-6, (P[L_SH] - P[R_SH]).length)
+        ears = (P[L_EAR] + P[R_EAR]) / 2
+        head = rest('head') + Vector((0, 0, 0.08))  # middle of the head (the head bone sits at its base)
+        for side, sh, el, wr in (('left', L_SH, L_EL, L_WR), ('right', R_SH, R_EL, R_WR)):
+            if not ok(sh, el, wr):
+                continue
+            near = (P[wr] - ears).length / max(1e-6, (P[L_SH] - P[R_SH]).length)  # in shoulder widths
+            k = min(1.0, max(0.0, (1.1 - near) / 0.4))  # 0 beyond 1.1, full inside 0.7
+            if k <= 0:
+                continue
+            S = rest(side + 'UpperArm'); E0 = rest(side + 'LowerArm'); W0 = rest(side + 'Hand')
+            a, b = (E0 - S).length, (W0 - E0).length
+            goal = head + (P[wr] - ears) * scale
+            reach = goal - S
+            d = min(reach.length, (a + b) * 0.999)
+            axis = reach.normalized()
+            pole = (P[el] - P[sh]) - (P[el] - P[sh]).project(P[wr] - P[sh])  # where the performer's elbow points
+            pole = (pole - pole.project(axis)).normalized() if pole.length > 1e-6 else Vector((0, 0, -1))
+            along = (a * a - b * b + d * d) / (2 * d)
+            elbow = S + axis * along + pole * math.sqrt(max(0.0, a * a - along * along))
+            wrist = S + axis * d
+            for h, v in ((side + 'UpperArm', elbow - S), (side + 'LowerArm', wrist - elbow)):
+                old_dir = targets[h][1] if h in targets and targets[h][0] == 'dir' else v
+                targets[h] = ('dir', old_dir.normalized().lerp(v.normalized(), k))
+
+    def apply_visor(self, face):
+        e = vrm_expressions(face)
+        expr = max(('happy', 'sad', 'angry', 'surprised'), key=e.get)
+        expr = expr if e[expr] > 0.35 else 'neutral'
+        blink = int(min(e['blinkLeft'], e['blinkRight']) > 0.5)
+        talk = (0, 0.5, 1)[min(2, int(e['aa'] * 3))]
+        g = e['lookLeft'] - e['lookRight']  # performer's left = the avatar's left = viewer's right (+x on the screen)
+        gaze = 1 if g > 0.3 else -1 if g < -0.3 else 0
+        image = bpy.data.images.get(f'visor_face:{expr}_{blink}_{talk:g}_{gaze}')
+        if image and self.visor_node.image != image:
+            self.visor_node.image = image
+
     def apply_face(self, face):
+        if self.visor_node:
+            self.apply_visor(face)
         weights = {}
         for name, value in vrm_expressions(face).items():
             for obj_name, key, w in self.expressions.get(name, []):
