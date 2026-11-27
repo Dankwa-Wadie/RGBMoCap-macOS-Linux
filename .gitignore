@@ -121,3 +121,4 @@ third_party/KimodoMotionCorrection/bin/*.so
 .venv-splat/
 /config/face_profile.json
 /config/face_samples.json
+/config/face_test_samples.json

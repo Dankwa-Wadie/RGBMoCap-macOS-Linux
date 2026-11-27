@@ -122,9 +122,19 @@ points each bone at its child (hand -> middle finger, foot -> toe).
 - Capture loads the profile automatically (`--no-face-profile` to skip): `packet['face']` is rescaled and
   `packet['face_expr'] = [label, confidence]`. Receiver (visor): uses the label at confidence >= 0.35, switches
   after it holds 3 frames, else the old blendshape rule.
-- Real calibration run: 91 face frames per step, held-out accuracy 1.0 (optimistic: same 3 s hold); centroid
-  separation: angry/surprised/happy far apart, sad closest to neutral (subtle sad face). Not yet checked live
-  with the performer making faces at the camera (the live test session had the face turned away).
+- Classifier (rewritten after a fresh-round test): each expression is a direction from the performer's neutral;
+  score = progress along it (capped 1.2) x size weight (`SIZE_WEIGHT` 0.9: a subtle expression's short direction
+  must not win by sheer distance) - `OFF_WEIGHT` 0.15 x sideways movement; neutral below `STRENGTH` 0.2.
+- Honest scores. `face_calibrate.py --test` records a fresh round and scores the SAVED profile (changes nothing;
+  frames kept in git-ignored `config/face_test_samples.json`; `--test-file` re-scores offline).
+  Nearest-centroid: 1.0 on the calibration's own held-out frames but 0.50 on a fresh round (a natural smile read
+  as neutral 93 %, angry 0 %). Causes found: a medium or open-mouthed smile is far from the calibrated big smile;
+  the performer's subtle sad has a short direction that weak angry faces overshoot. New classifier, tuned on both
+  rounds: fresh 0.96 (neutral 0.99, happy 1.0, sad 0.98, angry 0.84, surprised 1.0), calibration 0.95.
+  Tuned on one fresh round: re-test with `--test` in another session/lighting before trusting further.
+- Live check (1119 frames, performer making faces): happy/angry/surprised/sad show as long stable runs; angry and
+  sad sometimes alternate (closest pair for this face); 13 runs shorter than 3 frames, hidden by the hold.
+- Receiver uses any calibrated label (`EXPR_CONFIDENCE` 0.0; the classifier thresholds itself), 3-frame hold.
 
 ### 10. Match webcam camera
 - Receiver `CameraMatch`: per packet, fits a pinhole camera (position + yaw/pitch/roll; horizontal FOV from the

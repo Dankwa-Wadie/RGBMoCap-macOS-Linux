@@ -8,6 +8,7 @@ A window shows one prompt at a time (neutral, smile, sad, angry, surprised, eyes
 config/face_profile.json (git-ignored personal data) and capture.py uses it automatically from then on.
 Prints the accuracy on held-out frames of each expression ("ACCURACY ...").
 --samples FILE rebuilds the profile from earlier saved samples without the camera.
+--test records a fresh round and scores the saved profile on faces it has never seen (changes nothing).
 """
 from __future__ import annotations
 
@@ -17,10 +18,11 @@ from pathlib import Path
 import face_profile as FP
 
 SAMPLES = FP.ROOT / 'config' / 'face_samples.json'
+TESTS = FP.ROOT / 'config' / 'face_test_samples.json'
 WAIT_LIMIT = 30.0  # s a step waits for a face before moving on
 
 
-def record(camera, seconds, ready=2.0):
+def record(camera, seconds, ready=2.0, steps=FP.STEPS):
     import cv2, mediapipe as mp
     from mediapipe.tasks import python as T
     from mediapipe.tasks.python import vision as V
@@ -33,7 +35,7 @@ def record(camera, seconds, ready=2.0):
         sys.exit('Camera not available (close the live capture first).')
     samples, start = {}, time.monotonic()
     try:
-        for label, prompt in FP.STEPS:
+        for label, prompt in steps:
             frames, t0, seen, last = [], time.monotonic(), 0.0, None
             print('STEP', label, flush=True)
             while True:
@@ -54,7 +56,7 @@ def record(camera, seconds, ready=2.0):
                 view = cv2.flip(frame, 1)  # mirror: easier to make faces at yourself
                 h, w = view.shape[:2]
                 cv2.rectangle(view, (0, 0), (w, 90), (0, 0, 0), -1)
-                cv2.putText(view, f'{FP.STEPS.index((label, prompt)) + 1}/{len(FP.STEPS)}  {prompt}', (20, 40),
+                cv2.putText(view, f'{steps.index((label, prompt)) + 1}/{len(steps)}  {prompt}', (20, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                 status = (f'Get ready... {ready - now:.1f} s' if now < ready else
                           f'Recording... {max(0.0, seconds - seen):.1f} s' if found else
@@ -78,7 +80,28 @@ def main():
     ap.add_argument('--camera', type=int, default=0)
     ap.add_argument('--seconds', type=float, default=3.0)
     ap.add_argument('--samples', type=Path, help='rebuild from saved samples (no camera)')
+    ap.add_argument('--test', action='store_true',
+                    help='record a fresh round of the expressions and score the SAVED profile on it (changes nothing)')
+    ap.add_argument('--test-file', type=Path, help='score the saved profile on an earlier --test round (no camera)')
     args = ap.parse_args()
+    if args.test_file:
+        args.test = True
+    if args.test:
+        profile = FP.load()
+        if not profile:
+            sys.exit('No face profile yet: run the calibration first.')
+        steps = tuple(s for s in FP.STEPS if s[0] in FP.EXPRESSIONS)
+        fresh = json.loads(args.test_file.read_text(encoding='utf-8')) if args.test_file else record(args.camera, args.seconds, steps=steps)
+        if not args.test_file:
+            TESTS.write_text(json.dumps(fresh), encoding='utf-8')  # kept to compare classifier changes offline
+        per, confusion = {}, {}
+        for label, frames in fresh.items():
+            got = [FP.classify(FP.normalize(f, profile), profile) for f in frames]
+            per[label] = sum(g == label for g, _ in got) / max(1, len(got))
+            confusion[label] = {g: sum(1 for x, _ in got if x == g) for g in sorted({x for x, _ in got})}
+        print('TEST ACCURACY', round(sum(per.values()) / max(1, len(per)), 3), json.dumps({k: round(v, 2) for k, v in per.items()}))
+        print('TEST PICKED', json.dumps(confusion))
+        return
     if args.samples:
         samples = json.loads(args.samples.read_text(encoding='utf-8'))
     else:

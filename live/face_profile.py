@@ -30,6 +30,9 @@ STEPS = (  # calibration prompts: label, instruction
     ('talk', 'Open your mouth wide (say "aah")'),
 )
 MIN_SPAN = 0.08
+SIZE_WEIGHT = 0.9  # 0 = every expression equal; 1 = scores scale with the expression's size
+OFF_WEIGHT = 0.15  # how much movement unlike the expression counts against it
+STRENGTH = 0.2  # an expression shows once the face is this far (0..1) from neutral toward it
 # Gaze and blinks say nothing about the emotion (a glance during the "sad" step must not make looking
 # left read as sad): the classifier ignores them. They are still rescaled for the avatars.
 IGNORE = ('eyeLook', 'eyeBlink')
@@ -74,16 +77,38 @@ def normalize(face, profile):
 
 
 def classify(face_norm, profile):
-    """Nearest centroid -> (label, confidence 0..1). Confidence compares the best and second-best distances."""
+    """-> (label, confidence 0..1). Each expression is a direction away from this performer's neutral face;
+    the score is how far along it the face has moved (0 = neutral, 1 = the calibrated full expression). So a
+    natural, half-strength smile still reads as happy (nearest-centroid called it neutral: 7 % on a fresh round).
+    Below STRENGTH on every direction -> neutral."""
     names, cents = profile.get('features') or profile['names'], profile.get('centroids') or {}
-    if not cents:
+    if 'neutral' not in cents:
         return None, 0.0
     x = [face_norm.get(n, 0.0) for n in names]
-    d = sorted((math.dist(x, c), label) for label, c in cents.items())
-    if len(d) == 1:
-        return d[0][1], 1.0
-    (d1, best), (d2, _) = d[0], d[1]
-    return best, round(max(0.0, min(1.0, 1 - d1 / max(1e-6, d2))) * 2, 3) if d2 > 0 else 1.0
+    n0 = cents['neutral']
+    # one yardstick for sideways movement: the typical neutral->expression distance (a subtle expression's
+    # short direction would otherwise turn ordinary noise into a huge penalty)
+    spans = sorted(math.dist(c, n0) for l, c in cents.items() if l != 'neutral')
+    ref = spans[len(spans) // 2] if spans else 1.0
+    best, score = 'neutral', 0.0
+    for label, c in cents.items():
+        if label == 'neutral':
+            continue
+        d = [ci - ni for ci, ni in zip(c, n0)]
+        dd = sum(v * v for v in d)
+        if dd < 1e-9:
+            continue
+        along = sum((xi - ni) * di for xi, ni, di in zip(x, n0, d)) / dd   # fraction of the way to `label`
+        off = math.dist([xi - ni for xi, ni in zip(x, n0)], [along * di for di in d]) / ref  # sideways
+        # capped, and weighted by how big a change the expression is (SIZE_WEIGHT): a subtle expression's short
+        # direction must not win by sheer distance (a weak angry face read as the performer's subtle sad)
+        size = min(1.0, math.sqrt(dd) / ref) ** SIZE_WEIGHT
+        s_ = min(along, 1.2) * size - OFF_WEIGHT * off
+        if s_ > score:
+            best, score = label, s_
+    if score < STRENGTH:
+        return 'neutral', round(min(1.0, 1 - score / STRENGTH), 3)
+    return best, round(min(1.0, score), 3)
 
 
 def evaluate(samples):

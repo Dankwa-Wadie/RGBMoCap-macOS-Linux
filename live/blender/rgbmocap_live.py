@@ -29,7 +29,7 @@ MAX_STEP, MAX_STEP_HAND = 45.0, 30.0  # deg per frame
 SMOOTH, SMOOTH_HAND = 3.0, 8.0        # deg: changes this size move half way per frame; much larger ones at once
 TORSO_SPAN = 0.35                     # shoulder span / (half torso or nose-shoulder height) below this = unreadable
 LYING_FRAMES = 8                      # ~0.4 s of agreement before switching between upright and lying
-EXPR_CONFIDENCE, EXPR_FRAMES = 0.35, 3   # visor: calibrated expression confidence; frames before it shows
+EXPR_CONFIDENCE, EXPR_FRAMES = 0.0, 3   # visor: the calibrated classifier applies its own STRENGTH threshold; hold 3 frames
 GRACE_FRAMES = 6                      # frames a bone that lost tracking holds before easing to rest
 
 # MediaPipe pose landmark indices
