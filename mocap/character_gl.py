@@ -136,7 +136,8 @@ class CharacterRenderer(MeshRenderer):
         self.vao.release();shader.release();gl.glDisable(0x0B71)
 
     def cpu_vertices(self,frame):
-        positions=cpu_skin.skin_sparse(host(self.model),self.vertex_count,frame,len(frame)//16)
+        frame=np.asarray(frame,np.float32).ravel()  # the palette arrives as (bones,4,4); len() counted bones/16
+        positions=cpu_skin.skin_sparse(host(self.model),self.vertex_count,frame,frame.size//16)
         records=cpu_skin.interleave(positions,self.topology()(positions))
         if self.expanded is not None:
             corners=np.empty((len(self.corner_index),8),np.float32)

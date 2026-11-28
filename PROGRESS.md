@@ -153,6 +153,25 @@ points each bone at its child (hand -> middle finger, foot -> toe).
   dropping upright hips at the bottom edge (broke the reclining shot); a face-roll vs torso check (could not be
   validated on the recordings).
 
+### 11. Offline ExMR + visor retarget in the app (sample video)
+- SMPL-X + MANO installed by the user (`tools/fetch_models.py --check`: 12/12). ExMR on `docs/samples/motion-capture.mp4`,
+  Person 1, through the GUI's own job path: keypoints ~12 min, SAM body features, HaMeR hands, ExMR solve, motion
+  correction, BVH export: 690 frames with fingers, ~27 min on the M4 Pro.
+- macOS fixes found on the way (all committed): `psutil.num_handles()` is Windows-only (batch_worker);
+  every QThread now gets a 16 MB stack (`platform_compat.enlarge_thread_stacks`, called from gui.py: the 512 KB
+  macOS default overflowed in OpenBLAS inside SceneDataLoader -> SIGBUS after a finished run); CPU character
+  skinning counted `len(frame)//16` on a (bones,4,4) palette -> 1 bone -> "cannot reshape ... (1,4,4)".
+- Visor FBX fixes: `to_fbx.py` runs with `--factory-startup` and exports only the armature + its meshes (a user
+  Blender add-on had added a 2 m Icosphere -> grey ball in the app); the bone-parented face screen is skinned
+  100 % to Head (the app imports skinned meshes only).
+- App: Import Character (visor) -> Retarget > Person 1 (108 s, contact solve) -> Export FBX with mesh (2.1 MB).
+  Viewport shows the visor on Person 1 with no errors; the exported FBX plays 690 frames in a clean Blender.
+- Driving the GUI from a script: open with `w.open_workspace(project_dir)` and wait for `w.people_state` before
+  running (`MainWindow(video)` alone opens nothing; running too early takes the single-actor path).
+- Project hygiene: the first, wrong (single-actor) runs left files in `exmr/`; moved to
+  `exmr/_stray_2026-11-28/` (not deleted). The group camera files (`exmr_camera*.json/.npy`) were restored: the
+  per-person take depends on them.
+
 ## Not done / known limits
 - MediaPipe pose misreads that no receiver rule can fix: sitting on the floor with knees up toward the camera
   and a phone in front of the chest (body laid sideways across the bed, legs splayed), and lying with the back

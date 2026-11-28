@@ -30,4 +30,17 @@ screen_material(os.path.dirname(os.path.abspath(sys.argv[sys.argv.index('--') + 
 arm = next(o for o in bpy.data.objects if o.type == 'ARMATURE')
 aim_bones(arm)
 print('BONES', [b.name for b in arm.data.bones])
-bpy.ops.export_scene.fbx(filepath=d + '/visor_mixamo.fbx', add_leaf_bones=False, bake_anim=False)
+# Face screen: parented to the Head bone in glTF; the app imports skinned meshes only, so skin it 100 % to Head.
+for o in [o for o in bpy.data.objects if o.type == 'MESH' and o.parent == arm and o.parent_type == 'BONE']:
+    world = o.matrix_world.copy(); bone = o.parent_bone
+    o.parent_type = 'OBJECT'; o.parent_bone = ''; o.matrix_world = world
+    group = o.vertex_groups.new(name=bone); group.add(range(len(o.data.vertices)), 1.0, 'REPLACE')
+    o.modifiers.new('Armature', 'ARMATURE').object = arm
+    print('SKINNED', o.name, 'to', bone)
+# Export only the character: the armature and the meshes it deforms (nothing a startup add-on may have added).
+keep = [arm] + [o for o in bpy.data.objects if o.type == 'MESH' and o.parent == arm]
+bpy.ops.object.select_all(action='DESELECT')
+for o in keep: o.select_set(True)
+bpy.context.view_layer.objects.active = arm
+print('EXPORT', [o.name for o in keep])
+bpy.ops.export_scene.fbx(filepath=d + '/visor_mixamo.fbx', use_selection=True, add_leaf_bones=False, bake_anim=False)
