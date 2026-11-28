@@ -94,3 +94,27 @@ def peak_rss() -> int:
     import resource
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return peak if IS_MAC else peak * 1024  # macOS reports bytes, Linux KiB
+
+
+THREAD_STACK = 16 << 20
+
+
+def enlarge_thread_stacks() -> None:
+    """Give every QThread a 16 MB stack unless it set its own.
+
+    macOS starts secondary threads with 512 KB. OpenBLAS (numpy.linalg.inv in the scene loader) reserves
+    more than that on the stack and the app died with SIGBUS (stack guard) after a finished ExMR run.
+    Windows' 1 MB default happened to suffice. Idempotent.
+    """
+    from PySide6.QtCore import QThread
+    if getattr(QThread.start, '_rgbmocap_stack', False):
+        return
+    original = QThread.start
+
+    def start(self, *args, **kwargs):
+        if self.stackSize() == 0:
+            self.setStackSize(THREAD_STACK)
+        return original(self, *args, **kwargs)
+
+    start._rgbmocap_stack = True
+    QThread.start = start

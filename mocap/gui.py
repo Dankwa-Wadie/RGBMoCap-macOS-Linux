@@ -1,4 +1,6 @@
 from __future__ import annotations
+from .platform_compat import enlarge_thread_stacks
+enlarge_thread_stacks()  # before any loader thread starts (macOS 512 KB default overflowed in OpenBLAS)
 from .tooltips import tooltip_text
 from .ui_refresh import batch_readiness
 from .validation_snapshot import read_only_checks
